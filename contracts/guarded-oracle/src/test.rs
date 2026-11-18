@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::{aggregate, Asset, GuardedOracle, GuardedOracleClient, PriceData};
+use crate::{aggregate, Asset, GuardedOracle, GuardedOracleClient, Policy, PriceData, UNBOUNDED};
 use soroban_sdk::{
     contract, contractimpl, contracttype, testutils::Address as _, testutils::Ledger, vec, Address,
     Env, Symbol, Vec,
@@ -176,6 +176,30 @@ fn fewer_sources_than_quorum_is_rejected() {
         &s.asset,
         &vec![&s.env, (a.address.clone(), s.asset.clone())],
     );
+}
+
+#[test]
+fn policies_with_an_invalid_window_are_rejected() {
+    // found missing by the fuzz tests: a zero window would freeze the band at nothing, and one
+    // past a week would let a long-stale anchor stand for any price
+    let s = setup(1);
+    let ok = |window_secs| {
+        s.oracle
+            .try_set_policy(
+                &s.asset,
+                &Policy {
+                    up_bps_per_hour: 500,
+                    down_bps_per_hour: UNBOUNDED,
+                    window_secs,
+                },
+            )
+            .is_ok()
+    };
+    assert!(!ok(0));
+    assert!(!ok(7 * 24 * 3600 + 1));
+    assert!(!ok(u64::MAX));
+    assert!(ok(1));
+    assert!(ok(7 * 24 * 3600));
 }
 
 #[test]
@@ -417,6 +441,15 @@ mod gate_math {
         assert!(!uneconomic(1_000, i128::MAX, 20_000));
         // and a huge cost does not overflow either
         assert!(uneconomic(i128::MAX - 1, 1_000, 20_000));
+    }
+
+    #[test]
+    fn a_cost_too_large_to_multiply_is_still_uneconomic() {
+        // found by the stateful fuzzer: cost * 10_000 overflows i128, but a cost that large dwarfs
+        // any exposure, so the attack is uneconomic and the saturating product says so
+        let cost = 34_028_236_692_093_846_346_337_460_743_176_822_i128;
+        assert!(uneconomic(cost, 1, 1));
+        assert!(uneconomic(cost, 1_000_000_000_000, 20_000));
     }
 
     #[test]

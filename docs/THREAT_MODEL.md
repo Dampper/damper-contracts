@@ -37,6 +37,11 @@ A lending pool that reads one price feed lends against whatever that feed says. 
 | 15 | **The keeper publishes false evidence.** | Bounded: evidence can only tighten the clamp. The best a compromised keeper can publish returns the policy rate, which is where the oracle is with no gate. False evidence that looks bad only costs borrowers speed. |
 | 16 | **Evidence is out of date.** | Handled: evidence older than `max_evidence_age`, or from the future, counts as missing, and missing evidence gets the tight rate. |
 | 17 | **The cost model is wrong.** The keeper estimates cost from the asset's DEX order book and assumes every upstream reads it. | Accepted: if some upstreams read other venues the real cost is higher, so the gate is more cautious than needed. If it understates what an attacker can do (for example by ignoring AMM liquidity that can be pulled), the gate is looser than it should be. Documented in the backend's decision record. |
+| 18 | **Absurd magnitudes in evidence.** An exposure large enough that `exposure × ratio` overflows 128 bits (above about 10^38 oracle units). | Handled towards caution: the gate counts the overflow as not uneconomic and uses the tight rate. A cost that large saturates correctly. Property-tested against exact 256-bit arithmetic. |
+
+## Verification
+
+The rules this model relies on are checked, not just argued: the clamp only moves a price towards the anchor, the gate never loosens a policy, a free direction is never bounded, and a failed call changes nothing. They are tested for every input and under random sequences of events; see [TESTING.md](TESTING.md). That is testing, not proof: nothing here has been audited or formally verified.
 
 ## Out of scope
 

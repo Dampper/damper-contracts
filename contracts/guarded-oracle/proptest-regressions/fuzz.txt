@@ -1,0 +1,13 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1951d5d24af9908f29a46d4ae3495c190d290926cf78eeb96386fa4a2f27a744 # shrinks to ops = [SetPolicy(Policy { up_bps_per_hour: 4294967295, down_bps_per_hour: 32708, window_secs: 1 }), Evidence(170141183460469231731687303715884105727, 0, 34028236692093846346337460743176822, 1), SetGate(Gate { tight_up_bps_per_hour: 4294967295, tight_down_bps_per_hour: 0, min_cost_ratio_bps: 1, max_evidence_age: 1 })]
+cc 683df4249e6ab60bd29cf43c23c2c705b21fa477e1d10a0760c10074b3b1b1b9 # shrinks to price = 1215994734096790407241613, anchor = 1, up = 7, down = 4294967295, elapsed = 514286, window = 514286
+cc 1963fbfdaaf45e4e94cbc6b572e8db71095020c61b9d8ed6d39fd6b5b2ed901c # shrinks to price = 1, anchor = 2, elapsed = 0, up = 4294967295, down = 4294967295, window = 1
+cc 152a6bf5c51fc5331940c4854706f20c45a7f254c8526acd1e678607f194147d # shrinks to price = 1, anchor = 1, elapsed = 18446744073709551615, up = 60, down = 4294967295, window = 604800
+cc 9fc83a75f6f7e28668e0cf52575d3aa362a6d65385b1dd78c33a028095630051 # shrinks to ops = [SetGate(Gate { tight_up_bps_per_hour: 4294967295, tight_down_bps_per_hour: 0, min_cost_ratio_bps: 1, max_evidence_age: 1 })]
+cc fd163bec82489c066e85053cc1d7ae9c88b2cdc849a439830f0ed745137226e5 # shrinks to cost = 1, exposure = -11050999185533205490496707178220584, ratio = 15396
+cc c106e851d908d86ea524d79c5df068c043a159bc1501ca35252ed254e6d12ced # shrinks to ops = [Advance(1), Poke]

@@ -15,6 +15,7 @@ Companion repos: [damper-backend](https://github.com/Dampper/damper-backend) (ke
 More documentation:
 
 - [Architecture](docs/ARCHITECTURE.md): contract surface, pricing, storage and roles
+- [Testing](docs/TESTING.md): unit tests, the replay, property tests and stateful fuzzing, and what each checks
 - [Threat model](docs/THREAT_MODEL.md): what each party can and cannot do, and which risks are still open
 - [Decision records](docs/adr/README.md): why it is built this way
 - [Roadmap](ROADMAP.md) and [changelog](CHANGELOG.md)
@@ -70,7 +71,7 @@ What made it possible, and is still true of Blend V2 today:
 | Real crash (−53% in one round) | reaches the pool in full, so liquidations still work |
 | Policy set, anchor not seeded | no price; borrows revert |
 
-The fourth row is the reason the clamp exists: a median cannot help when several feeds derive from the same thin market. Mutation checks confirm the tests can fail: disabling the clamp breaks 4 replay tests, replacing the median with "first source" breaks 3, and for the gate, ignoring it breaks 3, keeping the policy rate on missing evidence breaks 7, letting the tight rate loosen a policy breaks 1, and never expiring evidence breaks 2.
+The fourth row is the reason the clamp exists: a median cannot help when several feeds derive from the same thin market. Mutation checks confirm the tests can fail (16 deliberate bugs, each caught, except one that no input can distinguish; two were caught only by the fuzz tests; see [docs/TESTING.md](docs/TESTING.md)). Earlier checks: disabling the clamp breaks 4 replay tests, replacing the median with "first source" breaks 3, and for the gate, ignoring it breaks 3, keeping the policy rate on missing evidence breaks 7, letting the tight rate loosen a policy breaks 1, and never expiring evidence breaks 2.
 
 ### Open design questions
 
@@ -88,6 +89,8 @@ Implements the SEP-40 read interface: `base`, `assets`, `decimals`, `resolution`
 Admin: `set_sources(asset, Vec<(upstream_oracle, upstream_asset)>)`, `set_policy(asset, policy)`, `seed_anchor(asset)`, `set_keeper(address)`, `set_gate(asset, gate)`. Keeper (the admin until `set_keeper` is called): `poke(asset)`, `publish_evidence(asset, up_cost, up_exposure, down_cost, down_exposure)`. Views: `sources`, `config`, `policy`, `anchor`, `keeper`, `gate`, `evidence`, `effective_policy` (the policy after the gate), `raw_price` (the median before any clamp).
 
 ## Build and test
+
+The tests run in four layers: unit tests, the YieldBlox replay, property tests that check rules for every input, and a stateful fuzz test that throws random sequences of events at the deployed contract and checks its invariants after every step ([docs/TESTING.md](docs/TESTING.md)). A weekly workflow runs a much deeper search.
 
 `contracts/mock-feed` is an admin-settable SEP-40 feed for testnet demos and keeper tests; it must never back a real pool.
 

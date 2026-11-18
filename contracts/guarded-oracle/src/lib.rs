@@ -11,6 +11,12 @@
 mod aggregate;
 mod types;
 
+// the property tests need std, which the contract itself never links
+#[cfg(test)]
+extern crate std;
+
+#[cfg(test)]
+mod fuzz;
 #[cfg(test)]
 mod replay;
 #[cfg(test)]

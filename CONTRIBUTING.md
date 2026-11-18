@@ -38,6 +38,7 @@ make check    # all of the above
 CI runs the same commands. A pull request needs:
 
 - **A test that fails without the change**, for any change to how a price is computed, bounded or refused. The replay in `replay.rs` is the template: it states the scenario and asserts what a pool would see.
+- **A property, where one fits.** If the change adds a rule the oracle should keep for every input (a bound, an ordering, a refusal), state it as a property in [`fuzz.rs`](contracts/guarded-oracle/src/fuzz.rs) and, if it is a rule about the whole contract, as a check in the stateful test. Run `PROPTEST_CASES=5000 cargo test fuzz` before opening the pull request. If a property fails, commit the saved `proptest-regressions/` file with the fix. See [docs/TESTING.md](docs/TESTING.md).
 - **A mutation check for new guards.** If you add a protection, break it on purpose, confirm the test fails, and say so in the pull request.
 - **Docs.** If a design choice changed, update the matching decision record in [`docs/adr`](docs/adr/README.md) or add a new one.
 

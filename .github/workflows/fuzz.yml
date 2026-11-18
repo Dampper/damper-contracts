@@ -1,0 +1,37 @@
+name: Deep fuzz
+
+# A much deeper search than CI's per-push run. Runs weekly and on demand. If a property fails,
+# the shrunk failing input (proptest-regressions) is uploaded so it can be committed with the fix.
+
+on:
+  schedule:
+    - cron: '23 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      cases:
+        description: Cases per property
+        default: '20000'
+      stateful:
+        description: Random operation sequences against the contract
+        default: '250'
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Property and stateful fuzz tests
+        env:
+          PROPTEST_CASES: ${{ github.event.inputs.cases || '20000' }}
+          DAMPER_FUZZ_STATEFUL_CASES: ${{ github.event.inputs.stateful || '250' }}
+        run: cargo test fuzz
+      - name: Keep any failing case
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proptest-regressions
+          path: contracts/guarded-oracle/proptest-regressions/
+          if-no-files-found: ignore
