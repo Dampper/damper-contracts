@@ -25,8 +25,8 @@ pub use types::{Anchor, Asset, Config, OracleError, Policy, PriceData, Source, U
 pub const MAX_SOURCES: u32 = 7;
 const MAX_DECIMALS: u32 = 18;
 
-/// `poke` is a no-op more often than this. Anyone may call it, and moving the anchor
-/// resets the elapsed time that widens the band, so unlimited pokes could freeze it.
+/// `poke` is a no-op more often than this: moving the anchor resets the elapsed time
+/// that widens the band, so unlimited pokes could freeze it.
 pub const MIN_POKE_SECS: u64 = 300;
 const MAX_WINDOW_SECS: u64 = 7 * 24 * 3600;
 
@@ -49,6 +49,7 @@ enum DataKey {
     Sources(Asset),
     Policy(Asset),
     Anchor(Asset),
+    Keeper,
 }
 
 #[contract]
@@ -161,11 +162,27 @@ impl GuardedOracle {
         store_anchor(&env, &asset, p.price);
     }
 
-    /// Permissionless: move the anchor to the current clamped quote. Keepers call this
-    /// regularly so the anchor tracks real price changes at the policy's rate. It cannot
-    /// be used to move the anchor faster than the policy allows, and calls closer
-    /// together than `MIN_POKE_SECS` do nothing.
+    /// Admin: set the address allowed to call `poke`. Until set, it is the admin.
+    pub fn set_keeper(env: Env, keeper: Address) {
+        load_config(&env).admin.require_auth();
+        env.storage().instance().set(&DataKey::Keeper, &keeper);
+    }
+
+    pub fn keeper(env: Env) -> Address {
+        load_keeper(&env)
+    }
+
+    /// Keeper only: move the anchor to the current clamped quote, so the anchor tracks real
+    /// price changes at the policy's rate. Calls closer together than `MIN_POKE_SECS` do
+    /// nothing.
+    ///
+    /// This is not permissionless on purpose. Each poke moves the anchor to the quote, so
+    /// whoever pokes controls how fast it compounds. Poked every five minutes under a held
+    /// 5%/hour pump, the anchor reaches 3.3x in a day; unpoked, the band stops at the
+    /// window and the quote at 2.2x. An attacker must not be able to choose the former.
+    /// If the keeper stops, the anchor goes stale, which only makes quotes more cautious.
     pub fn poke(env: Env, asset: Asset) {
+        load_keeper(&env).require_auth();
         let Some(anchor) = load_anchor(&env, &asset) else {
             panic_with_error!(&env, OracleError::NoPrice);
         };
@@ -275,6 +292,13 @@ fn median_price(env: &Env, asset: Asset) -> Option<PriceData> {
         price,
         timestamp: oldest,
     })
+}
+
+fn load_keeper(env: &Env) -> Address {
+    env.storage()
+        .instance()
+        .get(&DataKey::Keeper)
+        .unwrap_or_else(|| load_config(env).admin)
 }
 
 fn load_anchor(env: &Env, asset: &Asset) -> Option<Anchor> {

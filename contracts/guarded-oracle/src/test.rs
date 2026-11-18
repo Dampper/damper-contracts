@@ -53,13 +53,13 @@ impl RevertingFeed {
 pub(crate) const NOW: u64 = 1_800_000_000;
 pub(crate) const MAX_AGE: u64 = 900;
 
-struct Setup<'a> {
-    env: Env,
-    oracle: GuardedOracleClient<'a>,
-    asset: Asset,
+pub(crate) struct Setup<'a> {
+    pub(crate) env: Env,
+    pub(crate) oracle: GuardedOracleClient<'a>,
+    pub(crate) asset: Asset,
 }
 
-fn setup(min_sources: u32) -> Setup<'static> {
+pub(crate) fn setup(min_sources: u32) -> Setup<'static> {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().set_timestamp(NOW);
@@ -270,5 +270,60 @@ mod clamp_math {
     fn huge_anchors_saturate_instead_of_overflowing() {
         let big = i128::MAX / 4;
         assert!(clamp(i128::MAX, big, 24 * 3600, &up_only(u32::MAX - 1)) >= big);
+    }
+}
+
+// ---------------------------------------------------------------- keeper auth
+
+mod keeper_auth {
+    use super::{feed, setup, NOW};
+    use crate::{Policy, UNBOUNDED};
+    use soroban_sdk::{testutils::Address as _, testutils::Ledger, vec, Address};
+
+    fn armed() -> (crate::test::Setup<'static>, Address) {
+        let s = setup(1);
+        let f = feed(&s.env, 7);
+        f.set(&s.asset, &10_000_000, &NOW);
+        s.oracle.set_sources(
+            &s.asset,
+            &vec![&s.env, (f.address.clone(), s.asset.clone())],
+        );
+        s.oracle.set_policy(
+            &s.asset,
+            &Policy {
+                up_bps_per_hour: 500,
+                down_bps_per_hour: UNBOUNDED,
+                window_secs: 3600,
+            },
+        );
+        s.oracle.seed_anchor(&s.asset);
+        s.env.ledger().set_timestamp(NOW + 600);
+        f.set(&s.asset, &10_000_000, &(NOW + 600));
+        let admin = s.oracle.config().admin;
+        (s, admin)
+    }
+
+    #[test]
+    fn keeper_defaults_to_the_admin_and_poke_requires_its_auth() {
+        let (s, admin) = armed();
+        assert_eq!(s.oracle.keeper(), admin);
+        s.oracle.poke(&s.asset);
+        let auths = s.env.auths();
+        assert_eq!(auths.len(), 1);
+        assert_eq!(auths[0].0, admin);
+    }
+
+    #[test]
+    fn poke_requires_the_configured_keeper_not_the_admin() {
+        let (s, admin) = armed();
+        let keeper = Address::generate(&s.env);
+        s.oracle.set_keeper(&keeper);
+        assert_eq!(s.oracle.keeper(), keeper);
+
+        s.oracle.poke(&s.asset);
+        let auths = s.env.auths();
+        assert_eq!(auths.len(), 1);
+        assert_eq!(auths[0].0, keeper);
+        assert_ne!(auths[0].0, admin);
     }
 }

@@ -32,7 +32,7 @@ What made it possible, and is still true of Blend V2 today:
 | Upstream aggregation | done | Up to 7 SEP-40 feeds per asset, each with its own asset identifier and decimals. Reverting, stale, future-dated or non-positive prices are skipped. |
 | Quorum | done | Returns `None` unless at least `min_sources` fresh prices exist. |
 | Median | done | One manipulated feed out of three cannot move the result. The returned timestamp is the oldest price used. |
-| Anchor clamp | done | Per asset, the quote may sit at most `anchor × (1 ± rate × min(elapsed, window) / 1h)` away from a stored anchor. Collateral assets bound upward moves and let drops through; debt assets the reverse. The anchor moves only through `poke`, which anyone can call but which does nothing within 300 s of the last move. |
+| Anchor clamp | done | Per asset, the quote may sit at most `anchor × (1 ± rate × min(elapsed, window) / 1h)` away from a stored anchor. Collateral assets bound upward moves and let drops through; debt assets the reverse. The anchor moves only through `poke`, which only the keeper address can call and which does nothing within 300 s of the last move. |
 | Per-asset policy | done | `set_policy(asset, {up_bps_per_hour, down_bps_per_hour, window_secs})`; `UNBOUNDED` disables a direction. A policy without a seeded anchor returns no price (fails closed). |
 | Manipulation-cost gate | planned | The keeper publishes an estimate of what it costs to move each asset's price by x%, from SDEX order-book depth and AMM reserves. If that cost is below what the pool could lose through the asset, the upward rate tightens. |
 | YieldBlox replay | done | See below. Runs against a minimal lending pool, not Blend itself. |
@@ -60,6 +60,7 @@ The fourth row is the reason the clamp exists: a median cannot help when several
 - **Failing closed vs. open.** Blend unwraps `lastprice`; `None` reverts every pool action touching that asset, including liquidations. The clamp is meant to keep quoting a bounded price rather than return `None`, but the right behaviour when quorum is lost is still open.
 - **Sustained manipulation drags the anchor.** The clamp turns a one-trade exploit into one that costs the attacker a day of holding a pumped price, with the keeper poking the anchor along at the policy rate. It does not make manipulation impossible. The manipulation-cost gate is meant to tighten the rate when holding the price is cheap.
 - **Rates need real data.** 500 bps per hour is a placeholder. Reasonable rates depend on each asset's historical volatility; the backend scanner is where those measurements will come from.
+- **`poke` is not permissionless.** Each poke moves the anchor to the current quote, so whoever pokes chooses how fast the anchor compounds. Under a held 5%/hour pump, poking every five minutes takes the anchor to 3.3x in a day, while an unpoked band stops at 2.2x. Letting an attacker choose the first would hand them the faster path, so only a configured keeper can poke. If the keeper stops, the anchor goes stale and quotes get more cautious.
 - **Seeding is a trust point.** `seed_anchor` takes the unclamped median, so it must run while the market is calm.
 - **Legitimate fast rallies.** An asset that really doubles in an hour will be undervalued as collateral for a while. That is the conservative direction for the pool and the cost to borrowers.
 
@@ -67,9 +68,11 @@ The fourth row is the reason the clamp exists: a median cannot help when several
 
 Implements the SEP-40 read interface: `base`, `assets`, `decimals`, `resolution`, `price`, `prices`, `lastprice`. `price` and `prices` (historical lookups) currently return `None`; Blend only calls `lastprice` and `decimals`.
 
-Admin: `set_sources(asset, Vec<(upstream_oracle, upstream_asset)>)`, `set_policy(asset, policy)`, `seed_anchor(asset)`. Anyone: `poke(asset)`. Views: `sources`, `config`, `policy`, `anchor`, `raw_price` (the median before any clamp).
+Admin: `set_sources(asset, Vec<(upstream_oracle, upstream_asset)>)`, `set_policy(asset, policy)`, `seed_anchor(asset)`, `set_keeper(address)`. Keeper (the admin until `set_keeper` is called): `poke(asset)`. Views: `sources`, `config`, `policy`, `anchor`, `keeper`, `raw_price` (the median before any clamp).
 
 ## Build and test
+
+`contracts/mock-feed` is an admin-settable SEP-40 feed for testnet demos and keeper tests; it must never back a real pool.
 
 Requires Rust with the `wasm32v1-none` target and [`stellar-cli`](https://github.com/stellar/stellar-cli).
 
@@ -77,6 +80,21 @@ Requires Rust with the `wasm32v1-none` target and [`stellar-cli`](https://github
 cargo test
 stellar contract build
 ```
+
+## Testnet demo deployment
+
+A demo deployment on Stellar testnet, with three admin-settable mock feeds standing in for upstream oracles. Throwaway keys, no real value.
+
+| Contract | Address |
+|---|---|
+| Guarded oracle | `CBJLNEAOIIGMAQNWG7UZYMDLD5CR7ZTCFN3NILSWCY544WFHN65TBJQT` |
+| Mock feeds | `CBEQGH2Y7YQWP3P4UYTQVTEBJ6TE7EB4LA73XUOXJZLME2MGSLCYGJTP`, `CABBBBRPUJLOQZLHBU5UUYNHXMZDURIY6I3Q44QYZSAHY6LOTEPD7QUE`, `CCOW6QR5MUQ5TYK6PAJZDOWCXROLNXWEIUGGTZ42SQL47L7ESSPDZSFB` |
+
+It prices the testnet XLM contract with a 5%/hour upward policy and a separate keeper address. What was run against it with the [keeper](https://github.com/UbsOrg/damper-backend#keeper):
+
+- the keeper's poke landed on ledger 5,791,954 once the anchor was past the 300 s minimum;
+- with all three feeds set to $106.74, `raw_price` returned $106.74 while `lastprice` returned $1.0624 (the $1.06 anchor plus the allowance for 160 s), and the keeper held its pokes and raised a critical `suspicious-move` alert;
+- a poke signed by the admin instead of the keeper is refused: the contract asks for the keeper's signature.
 
 ## Roadmap
 
