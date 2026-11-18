@@ -8,10 +8,11 @@ Damper is one Soroban contract, `damper-guarded-oracle`, plus a test-only mock f
                             │ 2  drop stale, future-dated, non-positive prices            │
                             │ 3  require min_sources fresh prices, take the median        │
                             │ 4  if the asset has a policy: bound the median around the   │
-                            │    stored anchor (needs a seeded anchor, else no price)     │
+                            │    stored anchor (needs a seeded anchor, else no price),    │
+                            │    at a rate the cost gate may tighten                      │
                             └──────────────┬───────────────────────────▲──────────────────┘
                                            │ reads                      │ poke(asset)
-                       upstream feeds ◀────┘                      keeper (off-chain)
+                       upstream feeds ◀────┘          keeper: poke + market evidence
 ```
 
 ## Contract surface
@@ -22,10 +23,12 @@ Damper is one Soroban contract, `damper-guarded-oracle`, plus a test-only mock f
 | `set_sources(asset, [(upstream, upstream_asset)])` | admin | Replaces an asset's upstream feeds (at most 7, at least `min_sources`); reads and stores each feed's decimals |
 | `set_policy(asset, policy)` | admin | Sets how fast the quote may move away from the anchor |
 | `seed_anchor(asset)` | admin | Sets the anchor to the current unclamped median |
-| `set_keeper(address)` | admin | Chooses who may call `poke` |
+| `set_keeper(address)` | admin | Chooses who may call `poke` and `publish_evidence` |
+| `set_gate(asset, gate)` | admin | Ties the asset's clamp rate to the keeper's market evidence |
+| `publish_evidence(asset, up_cost, up_exposure, down_cost, down_exposure)` | keeper | Reports what it costs to move the price and what that would unlock |
 | `poke(asset)` | keeper | Moves the anchor to the current quote; no-op within 300 s of the last move |
 | `lastprice`, `decimals`, `base`, `assets`, `resolution` | anyone | SEP-40 reads |
-| `raw_price`, `policy`, `anchor`, `keeper`, `sources`, `config` | anyone | Monitoring views |
+| `raw_price`, `policy`, `effective_policy`, `gate`, `evidence`, `anchor`, `keeper`, `sources`, `config` | anyone | Monitoring views; `effective_policy` is the policy after the gate |
 | `price`, `prices` | anyone | Historical SEP-40 reads; return nothing yet |
 
 ## Pricing
@@ -41,7 +44,9 @@ anchor × (1 + up_rate × min(elapsed, window) / 1h)    upper bound, if up_rate 
 anchor × (1 − down_rate × min(elapsed, window) / 1h)  lower bound, if down_rate is bounded, never below 1
 ```
 
-where `elapsed` is the time since the anchor last moved and rates are in basis points per hour. The band is computed in one division so short intervals do not round to zero, and saturates instead of overflowing. A policy without a seeded anchor returns `None`.
+The rates are the policy's, cut by the **cost gate** when the asset has one. Per direction, a bounded rate stays as set only while fresh evidence says moving the price costs at least `min_cost_ratio_bps / 10_000` times what it unlocks; otherwise it becomes `min(policy rate, tight rate)`. A direction the policy leaves unbounded is never touched. See [ADR 0004](adr/0004-cost-gate-tightens-never-loosens.md).
+
+Here `elapsed` is the time since the anchor last moved and rates are in basis points per hour. The band is computed in one division so short intervals do not round to zero, and saturates instead of overflowing. A policy without a seeded anchor returns `None`.
 
 ## Storage
 
@@ -51,18 +56,20 @@ where `elapsed` is the time since the anchor last moved and rates are in basis p
 | `Sources(asset)` | persistent | `set_sources` |
 | `Policy(asset)` | persistent | `set_policy` |
 | `Anchor(asset)` | persistent | `seed_anchor`, `poke` |
+| `Gate(asset)` | persistent | `set_gate` |
+| `Evidence(asset)` | persistent | `publish_evidence` |
 
 Soroban archives entries whose time-to-live runs out, and a price lookup that touches an archived entry fails. Writes extend the entry they touch, and `poke` extends everything a lookup reads (`keep_alive`), so a running keeper carries the expiry forward. An oracle with no keeper and no admin activity for about 60 days would stop quoting until its entries are restored.
 
 ## Roles
 
 - **Admin** chooses sources, policies and the keeper, and seeds anchors. Trusted: see the [threat model](THREAT_MODEL.md).
-- **Keeper** only calls `poke`. It holds no other power, so a stolen keeper key can move an anchor at the policy's rate and nothing more.
+- **Keeper** calls `poke` and `publish_evidence`. Evidence can only tighten the clamp, so a stolen keeper key can move an anchor at the policy's rate and nothing more.
 - **Pools and everyone else** only read.
 
 ## Not built yet
 
-Events, historical `price` / `prices`, and the manipulation-cost gate. See the [roadmap](../ROADMAP.md).
+Events and historical `price` / `prices`. See the [roadmap](../ROADMAP.md).
 
 ## Decisions
 

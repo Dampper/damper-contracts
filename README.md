@@ -47,7 +47,7 @@ What made it possible, and is still true of Blend V2 today:
 | Median | done | One manipulated feed out of three cannot move the result. The returned timestamp is the oldest price used. |
 | Anchor clamp | done | Per asset, the quote may sit at most `anchor × (1 ± rate × min(elapsed, window) / 1h)` away from a stored anchor. Collateral assets bound upward moves and let drops through; debt assets the reverse. The anchor moves only through `poke`, which only the keeper address can call and which does nothing within 300 s of the last move. |
 | Per-asset policy | done | `set_policy(asset, {up_bps_per_hour, down_bps_per_hour, window_secs})`; `UNBOUNDED` disables a direction. A policy without a seeded anchor returns no price (fails closed). |
-| Manipulation-cost gate | planned | The keeper publishes an estimate of what it costs to move each asset's price by x%, from SDEX order-book depth and AMM reserves. If that cost is below what the pool could lose through the asset, the upward rate tightens. |
+| Manipulation-cost gate | done | Per asset, the keeper publishes what it costs to push the price up or down about 10x and what that would unlock. A bounded direction keeps its policy rate only while fresh evidence says the attack is uneconomic; otherwise it falls to a tight rate. It can only tighten, and never bounds a direction the policy leaves free. |
 | YieldBlox replay | done | See below. Runs against a minimal lending pool, not Blend itself. |
 
 ### YieldBlox replay
@@ -63,15 +63,19 @@ What made it possible, and is still true of Blend V2 today:
 | Damper, median + anchor clamp, all feeds pumped | refused; quote is $1.0644, anchor + 41.67 bps after 300 s |
 | Same, pump held 24 h, keeper poking hourly | never drained; at most about $350k borrowable at the end, 3% of the incident |
 | No keeper for a month | band stops widening at the window; quote capped at $2.33 |
+| Cost gate, held pump on a thin market | at most about $122k borrowable after 24 h, against about $350k without the gate |
+| Cost gate, same pump on a deep market | identical to no gate: it only acts where manipulation is cheap |
+| Cost gate, evidence missing or stale | tight rate applies |
+| Cost gate, best evidence a compromised keeper could publish | returns the policy rate, never looser |
 | Real crash (−53% in one round) | reaches the pool in full, so liquidations still work |
 | Policy set, anchor not seeded | no price; borrows revert |
 
-The fourth row is the reason the clamp exists: a median cannot help when several feeds derive from the same thin market. Mutation checks confirm the tests can fail: disabling the clamp breaks 4 replay tests, and replacing the median with "first source" breaks 3.
+The fourth row is the reason the clamp exists: a median cannot help when several feeds derive from the same thin market. Mutation checks confirm the tests can fail: disabling the clamp breaks 4 replay tests, replacing the median with "first source" breaks 3, and for the gate, ignoring it breaks 3, keeping the policy rate on missing evidence breaks 7, letting the tight rate loosen a policy breaks 1, and never expiring evidence breaks 2.
 
 ### Open design questions
 
 - **Failing closed vs. open.** Blend unwraps `lastprice`; `None` reverts every pool action touching that asset, including liquidations. The clamp is meant to keep quoting a bounded price rather than return `None`, but the right behaviour when quorum is lost is still open.
-- **Sustained manipulation drags the anchor.** The clamp turns a one-trade exploit into one that costs the attacker a day of holding a pumped price, with the keeper poking the anchor along at the policy rate. It does not make manipulation impossible. The manipulation-cost gate is meant to tighten the rate when holding the price is cheap.
+- **Sustained manipulation drags the anchor.** The clamp turns a one-trade exploit into one that costs the attacker a day of holding a pumped price. It does not make manipulation impossible. The cost gate tightens the rate where holding a price is cheap (about $122k borrowable after 24 hours on a thin market, against about $350k), but it rests on an estimate of cost, and a deep market can be thinned.
 - **Rates need real data.** 500 bps per hour is a placeholder. Reasonable rates depend on each asset's historical volatility; the backend scanner is where those measurements will come from.
 - **`poke` is not permissionless.** Each poke moves the anchor to the current quote, so whoever pokes chooses how fast the anchor compounds. Under a held 5%/hour pump, poking every five minutes takes the anchor to 3.3x in a day, while an unpoked band stops at 2.2x. Letting an attacker choose the first would hand them the faster path, so only a configured keeper can poke. If the keeper stops, the anchor goes stale and quotes get more cautious.
 - **Seeding is a trust point.** `seed_anchor` takes the unclamped median, so it must run while the market is calm.
@@ -81,7 +85,7 @@ The fourth row is the reason the clamp exists: a median cannot help when several
 
 Implements the SEP-40 read interface: `base`, `assets`, `decimals`, `resolution`, `price`, `prices`, `lastprice`. `price` and `prices` (historical lookups) currently return `None`; Blend only calls `lastprice` and `decimals`.
 
-Admin: `set_sources(asset, Vec<(upstream_oracle, upstream_asset)>)`, `set_policy(asset, policy)`, `seed_anchor(asset)`, `set_keeper(address)`. Keeper (the admin until `set_keeper` is called): `poke(asset)`. Views: `sources`, `config`, `policy`, `anchor`, `keeper`, `raw_price` (the median before any clamp).
+Admin: `set_sources(asset, Vec<(upstream_oracle, upstream_asset)>)`, `set_policy(asset, policy)`, `seed_anchor(asset)`, `set_keeper(address)`, `set_gate(asset, gate)`. Keeper (the admin until `set_keeper` is called): `poke(asset)`, `publish_evidence(asset, up_cost, up_exposure, down_cost, down_exposure)`. Views: `sources`, `config`, `policy`, `anchor`, `keeper`, `gate`, `evidence`, `effective_policy` (the policy after the gate), `raw_price` (the median before any clamp).
 
 ## Build and test
 
@@ -112,7 +116,7 @@ It prices the testnet XLM contract with a 5%/hour upward policy and a separate k
 ## Roadmap
 
 - **M1** — pool scanner over mainnet Blend pools (backend) ✓, YieldBlox replay test ✓, anchor clamp ✓
-- **M2** — manipulation-cost registry, keeper (anchor pokes and cost estimates), testnet deployment
+- **M2** — manipulation-cost gate ✓, keeper (anchor pokes and evidence), testnet deployment
 - **M3** — dashboard, operator configuration UI, external review
 - **M4** — NAV-attested price feeds for regulated RWAs (e.g. tokenized treasury funds), so they can be priced without relying on thin DEX markets
 

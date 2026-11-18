@@ -5,10 +5,11 @@ Status of the contracts. The repository README carries the design; this file tra
 ## Done
 
 - **M1.** Median and quorum over fresh upstream feeds, anchor clamp with per-asset policy, keeper-only anchor updates, YieldBlox replay, testnet demo deployment.
+- **Manipulation-cost gate.** The keeper publishes market evidence and the oracle tightens its clamp where an attack would pay. It can only tighten.
 
 ## Next
 
-- **Manipulation-cost gate.** The keeper publishes an estimate of what it costs to move each asset's price; the oracle tightens its upward rate when that cost is below what the pool could lose through the asset. Needs an on-chain registry and a keeper write path.
+- **Fit the rates and ratios to data.** The clamp rates, tight rates and the required cost ratio are placeholders. Fit them per asset from price history and measured depth.
 - **Events.** The oracle emits none yet. Anchor moves, policy changes and keeper changes should be observable without reading storage.
 - **Historical lookups.** `price` and `prices` return nothing. Anything that needs time-weighted prices from Damper itself will need an on-chain history.
 - **Fuzz and invariant tests** for the clamp: a quote never exceeds `anchor × (1 + rate × window)` in a bounded direction, whatever the upstreams report.

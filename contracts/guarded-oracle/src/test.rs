@@ -354,3 +354,147 @@ mod keeper_auth {
         assert_ne!(auths[0].0, admin);
     }
 }
+
+// ---------------------------------------------------------------- gate math
+
+mod gate_math {
+    use crate::{
+        aggregate::{effective_policy, uneconomic},
+        Evidence, Gate, Policy, UNBOUNDED, UNLIMITED,
+    };
+
+    const NOW: u64 = 1_000_000;
+
+    fn gate() -> Gate {
+        Gate {
+            tight_up_bps_per_hour: 50,
+            tight_down_bps_per_hour: 50,
+            min_cost_ratio_bps: 20_000, // cost must be at least 2x the exposure
+            max_evidence_age: 3600,
+        }
+    }
+    fn both(rate: u32) -> Policy {
+        Policy {
+            up_bps_per_hour: rate,
+            down_bps_per_hour: rate,
+            window_secs: 86_400,
+        }
+    }
+    fn evidence(
+        up_cost: i128,
+        up_exposure: i128,
+        down_cost: i128,
+        down_exposure: i128,
+        ts: u64,
+    ) -> Evidence {
+        Evidence {
+            up_cost,
+            up_exposure,
+            down_cost,
+            down_exposure,
+            timestamp: ts,
+        }
+    }
+
+    #[test]
+    fn cost_must_clear_the_ratio() {
+        // exposure 100, ratio 2x: cost 200 is enough, 199 is not
+        assert!(uneconomic(200, 100, 20_000));
+        assert!(!uneconomic(199, 100, 20_000));
+        // a ratio below 1x allows cost under exposure
+        assert!(uneconomic(50, 100, 5_000));
+    }
+
+    #[test]
+    fn nothing_to_take_or_untradeable_is_uneconomic() {
+        assert!(uneconomic(1, 0, 20_000));
+        assert!(uneconomic(1, -5, 20_000));
+        assert!(uneconomic(UNLIMITED, i128::MAX, 20_000));
+    }
+
+    #[test]
+    fn overflow_is_not_treated_as_safe() {
+        assert!(!uneconomic(1_000, i128::MAX, 20_000));
+        // and a huge cost does not overflow either
+        assert!(uneconomic(i128::MAX - 1, 1_000, 20_000));
+    }
+
+    #[test]
+    fn fresh_uneconomic_evidence_keeps_the_policy_rate() {
+        let e = evidence(1_000, 100, 1_000, 100, NOW - 10);
+        assert_eq!(
+            effective_policy(&both(500), &gate(), Some(&e), NOW),
+            both(500)
+        );
+    }
+
+    #[test]
+    fn an_economic_attack_gets_the_tight_rate() {
+        let e = evidence(100, 1_000, 100, 1_000, NOW - 10);
+        let p = effective_policy(&both(500), &gate(), Some(&e), NOW);
+        assert_eq!((p.up_bps_per_hour, p.down_bps_per_hour), (50, 50));
+    }
+
+    #[test]
+    fn missing_stale_and_future_evidence_get_the_tight_rate() {
+        let deep = |ts| evidence(1_000, 100, 1_000, 100, ts);
+        let tight =
+            |e: Option<&Evidence>| effective_policy(&both(500), &gate(), e, NOW).up_bps_per_hour;
+        assert_eq!(tight(None), 50);
+        assert_eq!(
+            tight(Some(&deep(NOW - 3_600))),
+            500,
+            "exactly at the age limit is still fresh"
+        );
+        assert_eq!(tight(Some(&deep(NOW - 3_601))), 50);
+        assert_eq!(
+            tight(Some(&deep(NOW + 1))),
+            50,
+            "evidence from the future is not trusted"
+        );
+    }
+
+    #[test]
+    fn directions_are_judged_independently() {
+        let e = evidence(1_000, 100, 100, 1_000, NOW);
+        let p = effective_policy(&both(500), &gate(), Some(&e), NOW);
+        assert_eq!((p.up_bps_per_hour, p.down_bps_per_hour), (500, 50));
+    }
+
+    #[test]
+    fn the_gate_never_loosens_a_policy() {
+        // tight rate above the policy rate: the lower one wins
+        let loose = Gate {
+            tight_up_bps_per_hour: 900,
+            ..gate()
+        };
+        let e = evidence(100, 1_000, 100, 1_000, NOW);
+        assert_eq!(
+            effective_policy(&both(500), &loose, Some(&e), NOW).up_bps_per_hour,
+            500
+        );
+        // and good evidence cannot raise a rate above the policy's
+        let deep = evidence(1_000_000, 1, 1_000_000, 1, NOW);
+        assert_eq!(
+            effective_policy(&both(500), &gate(), Some(&deep), NOW).up_bps_per_hour,
+            500
+        );
+    }
+
+    #[test]
+    fn a_direction_the_policy_leaves_unbounded_stays_unbounded() {
+        // collateral policy: drops pass through, so liquidations keep working whatever the evidence says
+        let collateral = Policy {
+            up_bps_per_hour: 500,
+            down_bps_per_hour: UNBOUNDED,
+            window_secs: 86_400,
+        };
+        let e = evidence(100, 1_000, 100, 1_000, NOW);
+        let p = effective_policy(&collateral, &gate(), Some(&e), NOW);
+        assert_eq!((p.up_bps_per_hour, p.down_bps_per_hour), (50, UNBOUNDED));
+        assert_eq!(
+            effective_policy(&collateral, &gate(), None, NOW).down_bps_per_hour,
+            UNBOUNDED
+        );
+    }
+}

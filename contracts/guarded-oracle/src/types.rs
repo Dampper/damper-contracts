@@ -69,6 +69,41 @@ pub struct Anchor {
     pub timestamp: u64,
 }
 
+/// Cost sentinel: the price cannot be moved by trading (for example it comes from off-chain
+/// exchanges). Treated as an uneconomic attack whatever the exposure.
+pub const UNLIMITED: i128 = i128::MAX;
+
+/// What the keeper reports about one asset's market, in USD with the oracle's decimals.
+///
+/// `up_cost` is the capital needed to push the price up about 10x and `up_exposure` what an
+/// attacker could then borrow against it; `down_cost` and `down_exposure` are the same for
+/// pushing it down. The oracle only trusts these to *loosen nothing*: see `Gate`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Evidence {
+    pub up_cost: i128,
+    pub up_exposure: i128,
+    pub down_cost: i128,
+    pub down_exposure: i128,
+    pub timestamp: u64,
+}
+
+/// Ties an asset's clamp rate to the evidence.
+///
+/// A bounded direction keeps its policy rate only while fresh evidence says moving the price
+/// costs at least `min_cost_ratio_bps / 10_000` times what it would let an attacker borrow.
+/// With stale or missing evidence, or when the attack looks economic, the rate falls to the
+/// tight rate. The gate can only tighten a policy, never loosen it, and never bounds a
+/// direction the policy leaves unbounded.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Gate {
+    pub tight_up_bps_per_hour: u32,
+    pub tight_down_bps_per_hour: u32,
+    pub min_cost_ratio_bps: u32,
+    pub max_evidence_age: u64,
+}
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -80,4 +115,6 @@ pub enum OracleError {
     InvalidPolicy = 5,
     NoPrice = 6,
     NoPolicy = 7,
+    InvalidGate = 8,
+    InvalidEvidence = 9,
 }

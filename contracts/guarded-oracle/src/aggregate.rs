@@ -1,6 +1,6 @@
 //! Pure price math, kept free of storage so it can be unit- and fuzz-tested directly.
 
-use crate::types::{Policy, UNBOUNDED};
+use crate::types::{Evidence, Gate, Policy, UNBOUNDED, UNLIMITED};
 use soroban_sdk::Vec;
 
 /// Rescale `price` from `from` decimals to `to` decimals.
@@ -76,5 +76,54 @@ fn band(anchor: i128, rate_bps: u32, secs: u128) -> i128 {
     match anchor.checked_mul(num) {
         Some(v) => v / DEN,
         None => (anchor / DEN).saturating_mul(num),
+    }
+}
+
+/// True when moving the price costs at least `min_ratio_bps / 10_000` times what it would let
+/// an attacker borrow. Nothing to take, or a price that trading cannot move, is uneconomic.
+pub fn uneconomic(cost: i128, exposure: i128, min_ratio_bps: u32) -> bool {
+    if cost == UNLIMITED || exposure <= 0 {
+        return true;
+    }
+    match exposure.checked_mul(min_ratio_bps as i128) {
+        Some(required) => cost.saturating_mul(10_000) >= required,
+        // exposure so large that the product overflows: not uneconomic
+        None => false,
+    }
+}
+
+/// The policy that applies right now: the admin's policy, with each bounded direction cut to
+/// the gate's tight rate unless fresh evidence says an attack in that direction is uneconomic.
+pub fn effective_policy(
+    policy: &Policy,
+    gate: &Gate,
+    evidence: Option<&Evidence>,
+    now: u64,
+) -> Policy {
+    let fresh =
+        evidence.filter(|e| e.timestamp <= now && now - e.timestamp <= gate.max_evidence_age);
+    let pick = |policy_rate: u32, tight: u32, cost: Option<i128>, exposure: Option<i128>| {
+        if policy_rate == UNBOUNDED {
+            return UNBOUNDED;
+        }
+        match (cost, exposure) {
+            (Some(c), Some(x)) if uneconomic(c, x, gate.min_cost_ratio_bps) => policy_rate,
+            _ => policy_rate.min(tight),
+        }
+    };
+    Policy {
+        up_bps_per_hour: pick(
+            policy.up_bps_per_hour,
+            gate.tight_up_bps_per_hour,
+            fresh.map(|e| e.up_cost),
+            fresh.map(|e| e.up_exposure),
+        ),
+        down_bps_per_hour: pick(
+            policy.down_bps_per_hour,
+            gate.tight_down_bps_per_hour,
+            fresh.map(|e| e.down_cost),
+            fresh.map(|e| e.down_exposure),
+        ),
+        window_secs: policy.window_secs,
     }
 }

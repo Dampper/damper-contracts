@@ -20,7 +20,10 @@ use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, panic_with_error, Address, Env, Vec,
 };
 
-pub use types::{Anchor, Asset, Config, OracleError, Policy, PriceData, Source, UNBOUNDED};
+pub use types::{
+    Anchor, Asset, Config, Evidence, Gate, OracleError, Policy, PriceData, Source, UNBOUNDED,
+    UNLIMITED,
+};
 
 pub const MAX_SOURCES: u32 = 7;
 const MAX_DECIMALS: u32 = 18;
@@ -49,6 +52,8 @@ pub(crate) enum DataKey {
     Sources(Asset),
     Policy(Asset),
     Anchor(Asset),
+    Gate(Asset),
+    Evidence(Asset),
     Keeper,
 }
 
@@ -162,6 +167,67 @@ impl GuardedOracle {
         store_anchor(&env, &asset, p.price);
     }
 
+    /// Admin: tie `asset`'s clamp rate to the keeper's market evidence (see `Gate`). Without a
+    /// gate the policy rate always applies.
+    pub fn set_gate(env: Env, asset: Asset, gate: Gate) {
+        load_config(&env).admin.require_auth();
+        if gate.min_cost_ratio_bps == 0
+            || gate.max_evidence_age == 0
+            || gate.max_evidence_age > MAX_WINDOW_SECS
+        {
+            panic_with_error!(&env, OracleError::InvalidGate);
+        }
+        let key = DataKey::Gate(asset);
+        env.storage().persistent().set(&key, &gate);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+
+    /// Keeper only: report what it costs to move `asset`'s price and what that would let an
+    /// attacker borrow. Costs use `UNLIMITED` for a price trading cannot move; exposures are
+    /// never negative. Evidence is stamped with the current ledger time and expires after the
+    /// gate's `max_evidence_age`.
+    pub fn publish_evidence(
+        env: Env,
+        asset: Asset,
+        up_cost: i128,
+        up_exposure: i128,
+        down_cost: i128,
+        down_exposure: i128,
+    ) {
+        load_keeper(&env).require_auth();
+        if up_cost <= 0 || down_cost <= 0 || up_exposure < 0 || down_exposure < 0 {
+            panic_with_error!(&env, OracleError::InvalidEvidence);
+        }
+        let key = DataKey::Evidence(asset);
+        let evidence = Evidence {
+            up_cost,
+            up_exposure,
+            down_cost,
+            down_exposure,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.storage().persistent().set(&key, &evidence);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+
+    pub fn gate(env: Env, asset: Asset) -> Option<Gate> {
+        env.storage().persistent().get(&DataKey::Gate(asset))
+    }
+
+    pub fn evidence(env: Env, asset: Asset) -> Option<Evidence> {
+        env.storage().persistent().get(&DataKey::Evidence(asset))
+    }
+
+    /// The policy that applies right now, after the gate. `None` when the asset has no policy.
+    pub fn effective_policy(env: Env, asset: Asset) -> Option<Policy> {
+        let policy = Self::policy(env.clone(), asset.clone())?;
+        Some(apply_gate(&env, &asset, policy))
+    }
+
     /// Admin: set the address allowed to call `poke`. Until set, it is the admin.
     pub fn set_keeper(env: Env, keeper: Address) {
         load_config(&env).admin.require_auth();
@@ -252,6 +318,7 @@ impl GuardedOracle {
         };
         let anchor = load_anchor(&env, &asset)?;
         let elapsed = env.ledger().timestamp().saturating_sub(anchor.timestamp);
+        let policy = apply_gate(&env, &asset, policy);
         let price = aggregate::clamp(median.price, anchor.price, elapsed, &policy);
         Some(PriceData {
             price,
@@ -303,6 +370,8 @@ fn keep_alive(env: &Env, asset: &Asset) {
         DataKey::Sources(asset.clone()),
         DataKey::Policy(asset.clone()),
         DataKey::Anchor(asset.clone()),
+        DataKey::Gate(asset.clone()),
+        DataKey::Evidence(asset.clone()),
     ] {
         if persistent.has(&key) {
             persistent.extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
@@ -318,6 +387,21 @@ fn load_keeper(env: &Env) -> Address {
         .instance()
         .get(&DataKey::Keeper)
         .unwrap_or_else(|| load_config(env).admin)
+}
+
+fn apply_gate(env: &Env, asset: &Asset, policy: Policy) -> Policy {
+    let Some(gate) = env
+        .storage()
+        .persistent()
+        .get::<_, Gate>(&DataKey::Gate(asset.clone()))
+    else {
+        return policy;
+    };
+    let evidence: Option<Evidence> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Evidence(asset.clone()));
+    aggregate::effective_policy(&policy, &gate, evidence.as_ref(), env.ledger().timestamp())
 }
 
 fn load_anchor(env: &Env, asset: &Asset) -> Option<Anchor> {

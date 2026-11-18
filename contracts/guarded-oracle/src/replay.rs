@@ -378,3 +378,219 @@ fn feeds_with_no_fresh_price_do_not_reach_the_clamp() {
 
 #[allow(dead_code)]
 fn _types_are_used(_: PriceData) {}
+
+// ------------------------------------------------------------------ the gate
+
+use crate::{Gate, UNLIMITED};
+
+const THIN_COST: i128 = 1_200 * SCALAR; // USD to push the price up 10x on a market with almost no depth
+const DEEP_COST: i128 = 50_000_000 * SCALAR;
+const EXPOSURE: i128 = 10_800_000 * SCALAR; // what the pool could lend against the false price
+
+fn gate() -> Gate {
+    Gate {
+        tight_up_bps_per_hour: 50,
+        tight_down_bps_per_hour: UNBOUNDED,
+        min_cost_ratio_bps: 20_000, // pushing the price must cost at least 2x what it unlocks
+        max_evidence_age: 3600,
+    }
+}
+
+/// An oracle for USTRY with the collateral policy and the gate, anchor seeded on a calm market.
+fn gated<'a>(w: &World<'a>) -> GuardedOracleClient<'a> {
+    let oracle = w.damper(2);
+    oracle.set_policy(&w.ustry, &collateral_policy());
+    oracle.set_gate(&w.ustry, &gate());
+    oracle.seed_anchor(&w.ustry);
+    oracle
+}
+
+/// `anchor * rate_bps * secs / (3600 * 10_000)`, the contract's band.
+fn band(anchor: i128, rate_bps: i128, secs: i128) -> i128 {
+    anchor * rate_bps * secs / 36_000_000
+}
+
+fn pump(w: &World) {
+    w.publish([USTRY_PUMPED, USTRY_PUMPED, USTRY_PUMPED]);
+}
+
+#[test]
+fn a_thin_market_gets_the_tight_rate_and_a_deep_one_the_policy_rate() {
+    let w = World::new();
+    let oracle = gated(&w);
+    w.advance(3600);
+    pump(&w);
+
+    oracle.publish_evidence(&w.ustry, &THIN_COST, &EXPOSURE, &DEEP_COST, &EXPOSURE);
+    let thin = oracle.lastprice(&w.ustry).unwrap().price;
+    assert_eq!(thin, USTRY_REAL + band(USTRY_REAL, 50, 3600));
+
+    oracle.publish_evidence(&w.ustry, &DEEP_COST, &EXPOSURE, &DEEP_COST, &EXPOSURE);
+    let deep = oracle.lastprice(&w.ustry).unwrap().price;
+    assert_eq!(deep, USTRY_REAL + band(USTRY_REAL, 500, 3600));
+    assert!(thin < deep);
+}
+
+#[test]
+fn without_fresh_evidence_the_tight_rate_applies() {
+    let w = World::new();
+    let oracle = gated(&w);
+    w.advance(3600);
+    pump(&w);
+    // nothing published at all
+    assert_eq!(
+        oracle.lastprice(&w.ustry).unwrap().price,
+        USTRY_REAL + band(USTRY_REAL, 50, 3600)
+    );
+
+    // published, then left to go stale
+    oracle.publish_evidence(&w.ustry, &DEEP_COST, &EXPOSURE, &DEEP_COST, &EXPOSURE);
+    w.advance(3601);
+    pump(&w);
+    assert_eq!(
+        oracle.lastprice(&w.ustry).unwrap().price,
+        USTRY_REAL + band(USTRY_REAL, 50, 3600 + 3601)
+    );
+}
+
+#[test]
+fn an_asset_with_no_gate_keeps_its_policy_rate() {
+    let w = World::new();
+    let oracle = w.damper(2);
+    oracle.set_policy(&w.ustry, &collateral_policy());
+    oracle.seed_anchor(&w.ustry);
+    w.advance(3600);
+    pump(&w);
+    assert_eq!(
+        oracle.lastprice(&w.ustry).unwrap().price,
+        USTRY_REAL + band(USTRY_REAL, 500, 3600)
+    );
+    assert_eq!(oracle.effective_policy(&w.ustry), Some(collateral_policy()));
+}
+
+/// Hold the pump for 24 hours with the keeper poking hourly, and return the most the
+/// attacker could have borrowed at any point, in whole dollars.
+fn best_borrow_while_holding(with_gate: bool, cost: i128) -> i128 {
+    let w = World::new();
+    let oracle = w.damper(2);
+    oracle.set_policy(&w.ustry, &collateral_policy());
+    if with_gate {
+        oracle.set_gate(&w.ustry, &gate());
+    }
+    oracle.seed_anchor(&w.ustry);
+    let pool = w.pool(&oracle.address);
+
+    let mut best = 0i128;
+    for _ in 0..24 {
+        w.advance(3600);
+        pump(&w);
+        if with_gate {
+            oracle.publish_evidence(&w.ustry, &cost, &EXPOSURE, &cost, &EXPOSURE);
+        }
+        oracle.poke(&w.ustry);
+        assert!(!w.drain(&pool), "pool drained mid-attack");
+        let price = oracle.lastprice(&w.ustry).unwrap().price;
+        let cap = ATTACKER_USTRY * price / SCALAR * COLLATERAL_FACTOR_BPS / LIABILITY_FACTOR_BPS;
+        best = best.max(cap / SCALAR);
+    }
+    best
+}
+
+#[test]
+fn a_held_pump_on_a_thin_market_borrows_far_less_with_the_gate() {
+    let without = best_borrow_while_holding(false, 0);
+    let thin = best_borrow_while_holding(true, THIN_COST);
+    let deep = best_borrow_while_holding(true, DEEP_COST);
+
+    // The incident took about $10.8M. Without the gate, a day of holding borrows about $350k.
+    // With the gate on a market this thin, about a third of that. On a deep market it makes
+    // no difference: the gate only acts where manipulation is cheap.
+    assert!(thin < without / 2, "thin {thin} vs without {without}");
+    assert!(thin < 150_000, "thin {thin}");
+    assert_eq!(deep, without);
+}
+
+#[test]
+fn a_real_crash_still_reaches_the_pool_through_the_gate() {
+    let w = World::new();
+    let oracle = gated(&w);
+    w.advance(300);
+    w.publish([5_000_000, 5_000_000, 5_000_000]);
+    oracle.publish_evidence(&w.ustry, &THIN_COST, &EXPOSURE, &THIN_COST, &EXPOSURE);
+    assert_eq!(oracle.lastprice(&w.ustry).unwrap().price, 5_000_000);
+}
+
+#[test]
+fn untradeable_prices_keep_the_policy_rate_whatever_the_exposure() {
+    let w = World::new();
+    let oracle = gated(&w);
+    w.advance(3600);
+    pump(&w);
+    oracle.publish_evidence(
+        &w.ustry,
+        &UNLIMITED,
+        &(10 * EXPOSURE),
+        &UNLIMITED,
+        &(10 * EXPOSURE),
+    );
+    assert_eq!(
+        oracle.lastprice(&w.ustry).unwrap().price,
+        USTRY_REAL + band(USTRY_REAL, 500, 3600)
+    );
+}
+
+#[test]
+fn a_keeper_cannot_loosen_a_policy_with_evidence() {
+    // The best evidence a (compromised) keeper can publish returns the policy rate, no more.
+    let w = World::new();
+    let oracle = gated(&w);
+    oracle.publish_evidence(&w.ustry, &UNLIMITED, &0, &UNLIMITED, &0);
+    assert_eq!(oracle.effective_policy(&w.ustry), Some(collateral_policy()));
+}
+
+#[test]
+fn bad_gates_and_bad_evidence_are_rejected() {
+    let w = World::new();
+    let oracle = gated(&w);
+    let bad_gates = [
+        Gate {
+            min_cost_ratio_bps: 0,
+            ..gate()
+        },
+        Gate {
+            max_evidence_age: 0,
+            ..gate()
+        },
+        Gate {
+            max_evidence_age: 8 * 24 * 3600,
+            ..gate()
+        },
+    ];
+    for g in bad_gates {
+        assert!(oracle.try_set_gate(&w.ustry, &g).is_err());
+    }
+    assert!(
+        oracle
+            .try_publish_evidence(&w.ustry, &0, &1, &1, &1)
+            .is_err(),
+        "zero cost"
+    );
+    assert!(
+        oracle
+            .try_publish_evidence(&w.ustry, &1, &-1, &1, &1)
+            .is_err(),
+        "negative exposure"
+    );
+    assert!(
+        oracle
+            .try_publish_evidence(&w.ustry, &1, &1, &-5, &1)
+            .is_err(),
+        "negative cost"
+    );
+    assert!(
+        oracle
+            .try_publish_evidence(&w.ustry, &1, &0, &1, &0)
+            .is_ok(),
+        "zero exposure is allowed"
+    );
+}

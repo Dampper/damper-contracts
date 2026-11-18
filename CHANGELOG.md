@@ -9,6 +9,7 @@ All notable changes to this repository are listed here. The format follows [Keep
 - Guarded SEP-40 oracle: median over up to seven upstream feeds per asset, skipping stale, future-dated, reverting and non-positive prices, with a minimum quorum.
 - Per-asset anchor clamp with a policy in basis points per hour and a window cap. Policies fail closed until the anchor is seeded.
 - Keeper role: only the keeper (the admin until `set_keeper`) can call `poke`, which is a no-op within 300 seconds of the last move.
+- Manipulation-cost gate: `set_gate`, `publish_evidence` (keeper only), `effective_policy`. A bounded direction keeps its policy rate only while fresh evidence says an attack is uneconomic, otherwise it uses a tight rate. It can only tighten and never bounds a free direction.
 - `poke` extends the expiry of every entry a price lookup reads.
 - Replay of the February 2026 YieldBlox exploit against a minimal lending pool, with controls and mutation checks.
 - `damper-mock-feed`: admin-settable SEP-40 feed for testnet demos.
