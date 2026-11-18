@@ -304,6 +304,33 @@ mod keeper_auth {
     }
 
     #[test]
+    fn poke_carries_every_entry_a_price_lookup_reads_past_a_quiet_period() {
+        use crate::{DataKey, DAY_LEDGERS};
+        use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
+        let (s, _) = armed();
+        // 50 days pass with nobody writing: the TTLs set at deployment run low
+        s.env
+            .ledger()
+            .set_sequence_number(s.env.ledger().sequence() + 50 * DAY_LEDGERS);
+        s.oracle.poke(&s.asset);
+        let id = s.oracle.address.clone();
+        s.env.as_contract(&id, || {
+            let p = s.env.storage().persistent();
+            for key in [
+                DataKey::Sources(s.asset.clone()),
+                DataKey::Policy(s.asset.clone()),
+                DataKey::Anchor(s.asset.clone()),
+            ] {
+                assert!(
+                    p.get_ttl(&key) >= 59 * DAY_LEDGERS,
+                    "persistent entry not extended"
+                );
+            }
+            assert!(s.env.storage().instance().get_ttl() >= 59 * DAY_LEDGERS);
+        });
+    }
+
+    #[test]
     fn keeper_defaults_to_the_admin_and_poke_requires_its_auth() {
         let (s, admin) = armed();
         assert_eq!(s.oracle.keeper(), admin);

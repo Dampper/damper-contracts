@@ -30,7 +30,7 @@ const MAX_DECIMALS: u32 = 18;
 pub const MIN_POKE_SECS: u64 = 300;
 const MAX_WINDOW_SECS: u64 = 7 * 24 * 3600;
 
-const DAY_LEDGERS: u32 = 17_280;
+pub(crate) const DAY_LEDGERS: u32 = 17_280;
 const TTL_THRESHOLD: u32 = 30 * DAY_LEDGERS;
 const TTL_EXTEND_TO: u32 = 60 * DAY_LEDGERS;
 
@@ -43,7 +43,7 @@ pub trait Upstream {
 
 #[contracttype]
 #[derive(Clone)]
-enum DataKey {
+pub(crate) enum DataKey {
     Config,
     Assets,
     Sources(Asset),
@@ -193,6 +193,7 @@ impl GuardedOracle {
             panic_with_error!(&env, OracleError::NoPrice);
         };
         store_anchor(&env, &asset, quote.price);
+        keep_alive(&env, &asset);
     }
 
     pub fn policy(env: Env, asset: Asset) -> Option<Policy> {
@@ -292,6 +293,24 @@ fn median_price(env: &Env, asset: Asset) -> Option<PriceData> {
         price,
         timestamp: oldest,
     })
+}
+
+/// Everything a price lookup reads must outlive a quiet period, or pools would revert once
+/// an entry is archived. The keeper's regular pokes carry the expiry forward.
+fn keep_alive(env: &Env, asset: &Asset) {
+    let persistent = env.storage().persistent();
+    for key in [
+        DataKey::Sources(asset.clone()),
+        DataKey::Policy(asset.clone()),
+        DataKey::Anchor(asset.clone()),
+    ] {
+        if persistent.has(&key) {
+            persistent.extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        }
+    }
+    env.storage()
+        .instance()
+        .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
 fn load_keeper(env: &Env) -> Address {
