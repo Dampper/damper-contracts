@@ -1,6 +1,6 @@
 # Contributing to Damper Contracts
 
-Thanks for helping. This page covers setup, checks and what a pull request needs. For the shared rules (labels, commit messages, code of conduct) see the [organisation guide](https://github.com/UbsOrg/.github/blob/main/CONTRIBUTING.md).
+Thanks for helping. This page covers setup, checks and what a pull request needs. For the shared rules (labels, commit messages, code of conduct) see the [organisation guide](https://github.com/Dampper/.github/blob/main/CONTRIBUTING.md).
 
 ## Finding something to work on
 
@@ -54,4 +54,4 @@ Imperative subject under about 70 characters, then a body that says why.
 
 ## Security
 
-Do not open public issues for vulnerabilities. See [SECURITY.md](https://github.com/UbsOrg/.github/blob/main/SECURITY.md).
+Do not open public issues for vulnerabilities. See [SECURITY.md](https://github.com/Dampper/.github/blob/main/SECURITY.md).

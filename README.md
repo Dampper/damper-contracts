@@ -1,16 +1,16 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/UbsOrg/.github/main/profile/damper-wordmark.png" alt="Damper" width="420">
+  <img src="https://raw.githubusercontent.com/Dampper/.github/main/profile/damper-wordmark.png" alt="Damper" width="420">
 </p>
 
 # Damper Contracts
 
-[![CI](https://github.com/UbsOrg/damper-contracts/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/UbsOrg/damper-contracts/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) ![Stellar testnet](https://img.shields.io/badge/network-Stellar%20testnet-informational)
+[![CI](https://github.com/Dampper/damper-contracts/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Dampper/damper-contracts/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) ![Stellar testnet](https://img.shields.io/badge/network-Stellar%20testnet-informational)
 
 Manipulation-resistant price oracle for Blend lending pools on Stellar.
 
 Damper is a SEP-40 price feed that a Blend pool can use as its oracle. It reads several upstream feeds, discards stale or broken ones, takes the median, and (in upcoming milestones) bounds sudden moves against a long-horizon anchor and refuses collateral prices whose market is cheaper to move than the pool is to drain.
 
-Companion repos: [damper-backend](https://github.com/UbsOrg/damper-backend) (keeper and pool scanner) · [damper-frontend](https://github.com/UbsOrg/damper-frontend) (pool risk dashboard).
+Companion repos: [damper-backend](https://github.com/Dampper/damper-backend) (keeper and pool scanner) · [damper-frontend](https://github.com/Dampper/damper-frontend) (pool risk dashboard).
 
 More documentation:
 
@@ -103,7 +103,7 @@ A demo deployment on Stellar testnet, with three admin-settable mock feeds stand
 | Guarded oracle | `CBJLNEAOIIGMAQNWG7UZYMDLD5CR7ZTCFN3NILSWCY544WFHN65TBJQT` |
 | Mock feeds | `CBEQGH2Y7YQWP3P4UYTQVTEBJ6TE7EB4LA73XUOXJZLME2MGSLCYGJTP`, `CABBBBRPUJLOQZLHBU5UUYNHXMZDURIY6I3Q44QYZSAHY6LOTEPD7QUE`, `CCOW6QR5MUQ5TYK6PAJZDOWCXROLNXWEIUGGTZ42SQL47L7ESSPDZSFB` |
 
-It prices the testnet XLM contract with a 5%/hour upward policy and a separate keeper address. What was run against it with the [keeper](https://github.com/UbsOrg/damper-backend#keeper):
+It prices the testnet XLM contract with a 5%/hour upward policy and a separate keeper address. What was run against it with the [keeper](https://github.com/Dampper/damper-backend#keeper):
 
 - the keeper's poke landed on ledger 5,791,954 once the anchor was past the 300 s minimum;
 - with all three feeds set to $106.74, `raw_price` returned $106.74 while `lastprice` returned $1.0624 (the $1.06 anchor plus the allowance for 160 s), and the keeper held its pokes and raised a critical `suspicious-move` alert;

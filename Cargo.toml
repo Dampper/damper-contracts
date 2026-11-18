@@ -6,7 +6,7 @@ members = ["contracts/*"]
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/UbsOrg/damper-contracts"
+repository = "https://github.com/Dampper/damper-contracts"
 
 [workspace.dependencies]
 soroban-sdk = "29.0.1"
