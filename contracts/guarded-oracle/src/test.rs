@@ -531,3 +531,180 @@ mod gate_math {
         );
     }
 }
+
+mod events {
+    use super::{feed, setup, Setup, NOW};
+    use crate::{
+        AnchorSeeded, EvidencePublished, Gate, GateSet, KeeperSet, Poked, Policy, PolicySet,
+        SourcesSet, UNBOUNDED,
+    };
+    use soroban_sdk::{
+        testutils::{Address as _, Events as _, Ledger},
+        vec, Address, Event,
+    };
+
+    /// The events of the call just made, and nothing else.
+    fn only<E: Event>(s: &Setup, e: E) {
+        assert_eq!(
+            s.env.events().all(),
+            std::vec![e.to_xdr(&s.env, &s.oracle.address)]
+        );
+    }
+
+    fn none(s: &Setup) {
+        assert!(s.env.events().all().events().is_empty());
+    }
+
+    fn armed() -> Setup<'static> {
+        let s = setup(1);
+        let f = feed(&s.env, 7);
+        f.set(&s.asset, &10_000_000, &NOW);
+        s.oracle.set_sources(
+            &s.asset,
+            &vec![&s.env, (f.address.clone(), s.asset.clone())],
+        );
+        only(
+            &s,
+            SourcesSet {
+                asset: s.asset.clone(),
+                count: 1,
+            },
+        );
+        s
+    }
+
+    fn policy() -> Policy {
+        Policy {
+            up_bps_per_hour: 500,
+            down_bps_per_hour: UNBOUNDED,
+            window_secs: 3600,
+        }
+    }
+
+    #[test]
+    fn each_admin_change_says_what_changed() {
+        let s = armed();
+
+        s.oracle.set_policy(&s.asset, &policy());
+        only(
+            &s,
+            PolicySet {
+                asset: s.asset.clone(),
+                up_bps_per_hour: 500,
+                down_bps_per_hour: UNBOUNDED,
+                window_secs: 3600,
+            },
+        );
+
+        s.oracle.set_gate(
+            &s.asset,
+            &Gate {
+                tight_up_bps_per_hour: 100,
+                tight_down_bps_per_hour: 100,
+                min_cost_ratio_bps: 15_000,
+                max_evidence_age: 3600,
+            },
+        );
+        only(
+            &s,
+            GateSet {
+                asset: s.asset.clone(),
+                tight_up_bps_per_hour: 100,
+                tight_down_bps_per_hour: 100,
+                min_cost_ratio_bps: 15_000,
+                max_evidence_age: 3600,
+            },
+        );
+
+        s.oracle.seed_anchor(&s.asset);
+        only(
+            &s,
+            AnchorSeeded {
+                asset: s.asset.clone(),
+                price: 10_000_000,
+            },
+        );
+
+        let keeper = Address::generate(&s.env);
+        s.oracle.set_keeper(&keeper);
+        only(
+            &s,
+            KeeperSet {
+                keeper: keeper.clone(),
+            },
+        );
+    }
+
+    #[test]
+    fn a_poke_reports_the_old_and_new_anchor_and_a_skipped_poke_is_silent() {
+        let s = armed();
+        s.oracle.set_policy(&s.asset, &policy());
+        s.oracle.seed_anchor(&s.asset);
+
+        // inside the minimum interval nothing moves, so nothing is said
+        s.env.ledger().set_timestamp(NOW + 299);
+        s.oracle.poke(&s.asset);
+        none(&s);
+
+        // a 5% rise held for ten minutes: the quote is clamped, and the event shows it
+        let f = crate::test::MockFeedClient::new(
+            &s.env,
+            &s.oracle.sources(&s.asset).get(0).unwrap().oracle,
+        );
+        s.env.ledger().set_timestamp(NOW + 600);
+        f.set(&s.asset, &30_000_000, &(NOW + 600));
+        let quote = s.oracle.lastprice(&s.asset).unwrap().price;
+        assert!(quote < 30_000_000);
+        s.oracle.poke(&s.asset);
+        only(
+            &s,
+            Poked {
+                asset: s.asset.clone(),
+                from: 10_000_000,
+                to: quote,
+                after_secs: 600,
+            },
+        );
+        assert_eq!(s.oracle.anchor(&s.asset).unwrap().price, quote);
+    }
+
+    #[test]
+    fn evidence_is_published_with_its_numbers() {
+        let s = armed();
+        s.oracle
+            .publish_evidence(&s.asset, &1_000, &2_000, &3_000, &4_000);
+        only(
+            &s,
+            EvidencePublished {
+                asset: s.asset.clone(),
+                up_cost: 1_000,
+                up_exposure: 2_000,
+                down_cost: 3_000,
+                down_exposure: 4_000,
+            },
+        );
+    }
+
+    #[test]
+    fn a_rejected_call_leaves_no_event() {
+        let s = armed();
+        let bad = Policy {
+            window_secs: 0,
+            ..policy()
+        };
+        assert!(s.oracle.try_set_policy(&s.asset, &bad).is_err());
+        none(&s);
+        assert!(s
+            .oracle
+            .try_publish_evidence(&s.asset, &0, &1, &1, &1)
+            .is_err());
+        none(&s);
+    }
+
+    #[test]
+    fn reading_a_price_emits_nothing() {
+        let s = armed();
+        s.oracle.lastprice(&s.asset);
+        none(&s);
+    }
+}

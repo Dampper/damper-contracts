@@ -31,6 +31,22 @@ Damper is one Soroban contract, `damper-guarded-oracle`, plus a test-only mock f
 | `raw_price`, `policy`, `effective_policy`, `gate`, `evidence`, `anchor`, `keeper`, `sources`, `config` | anyone | Monitoring views; `effective_policy` is the policy after the gate |
 | `price`, `prices` | anyone | Historical SEP-40 reads; return nothing yet |
 
+## Events
+
+Every state change emits one event, with the asset as a topic so a listener can follow a single asset. Data is a map of named fields.
+
+| Event | Emitted by | Data |
+| --- | --- | --- |
+| `sources_set` | `set_sources` | `count` |
+| `policy_set` | `set_policy` | `up_bps_per_hour`, `down_bps_per_hour`, `window_secs` |
+| `gate_set` | `set_gate` | `tight_up_bps_per_hour`, `tight_down_bps_per_hour`, `min_cost_ratio_bps`, `max_evidence_age` |
+| `anchor_seeded` | `seed_anchor` | `price` |
+| `poked` | `poke`, only when the anchor moved | `from`, `to`, `after_secs` |
+| `evidence_published` | `publish_evidence` | `up_cost`, `up_exposure`, `down_cost`, `down_exposure` |
+| `keeper_set` | `set_keeper` (no asset topic) | `keeper` |
+
+`lastprice` emits nothing. Pools call it on every action, and an event there would add to every user's fee. A call that fails emits nothing, because the whole call is rolled back.
+
 ## Pricing
 
 [`lastprice`](contracts/guarded-oracle/src/lib.rs) works in two steps.
@@ -69,7 +85,7 @@ Soroban archives entries whose time-to-live runs out, and a price lookup that to
 
 ## Not built yet
 
-Events and historical `price` / `prices`. See the [roadmap](../ROADMAP.md).
+Historical `price` / `prices`. See the [roadmap](../ROADMAP.md).
 
 ## Decisions
 

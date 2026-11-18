@@ -9,6 +9,7 @@
 //! still reaches the pool and liquidations keep working.
 
 mod aggregate;
+mod events;
 mod types;
 
 // the property tests need std, which the contract itself never links
@@ -26,6 +27,9 @@ use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, panic_with_error, Address, Env, Vec,
 };
 
+pub use events::{
+    AnchorSeeded, EvidencePublished, GateSet, KeeperSet, Poked, PolicySet, SourcesSet,
+};
 pub use types::{
     Anchor, Asset, Config, Evidence, Gate, OracleError, Policy, PriceData, Source, UNBOUNDED,
     UNLIMITED,
@@ -132,6 +136,12 @@ impl GuardedOracle {
             .persistent()
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 
+        events::SourcesSet {
+            asset: asset.clone(),
+            count: sources.len(),
+        }
+        .publish(&env);
+
         let mut assets: Vec<Asset> = env.storage().instance().get(&DataKey::Assets).unwrap();
         if !assets.contains(&asset) {
             assets.push_back(asset);
@@ -156,6 +166,13 @@ impl GuardedOracle {
         if policy.window_secs == 0 || policy.window_secs > MAX_WINDOW_SECS {
             panic_with_error!(&env, OracleError::InvalidPolicy);
         }
+        events::PolicySet {
+            asset: asset.clone(),
+            up_bps_per_hour: policy.up_bps_per_hour,
+            down_bps_per_hour: policy.down_bps_per_hour,
+            window_secs: policy.window_secs,
+        }
+        .publish(&env);
         let key = DataKey::Policy(asset);
         env.storage().persistent().set(&key, &policy);
         env.storage()
@@ -171,6 +188,11 @@ impl GuardedOracle {
             panic_with_error!(&env, OracleError::NoPrice);
         };
         store_anchor(&env, &asset, p.price);
+        events::AnchorSeeded {
+            asset,
+            price: p.price,
+        }
+        .publish(&env);
     }
 
     /// Admin: tie `asset`'s clamp rate to the keeper's market evidence (see `Gate`). Without a
@@ -183,6 +205,14 @@ impl GuardedOracle {
         {
             panic_with_error!(&env, OracleError::InvalidGate);
         }
+        events::GateSet {
+            asset: asset.clone(),
+            tight_up_bps_per_hour: gate.tight_up_bps_per_hour,
+            tight_down_bps_per_hour: gate.tight_down_bps_per_hour,
+            min_cost_ratio_bps: gate.min_cost_ratio_bps,
+            max_evidence_age: gate.max_evidence_age,
+        }
+        .publish(&env);
         let key = DataKey::Gate(asset);
         env.storage().persistent().set(&key, &gate);
         env.storage()
@@ -206,6 +236,14 @@ impl GuardedOracle {
         if up_cost <= 0 || down_cost <= 0 || up_exposure < 0 || down_exposure < 0 {
             panic_with_error!(&env, OracleError::InvalidEvidence);
         }
+        events::EvidencePublished {
+            asset: asset.clone(),
+            up_cost,
+            up_exposure,
+            down_cost,
+            down_exposure,
+        }
+        .publish(&env);
         let key = DataKey::Evidence(asset);
         let evidence = Evidence {
             up_cost,
@@ -238,6 +276,7 @@ impl GuardedOracle {
     pub fn set_keeper(env: Env, keeper: Address) {
         load_config(&env).admin.require_auth();
         env.storage().instance().set(&DataKey::Keeper, &keeper);
+        events::KeeperSet { keeper }.publish(&env);
     }
 
     pub fn keeper(env: Env) -> Address {
@@ -258,13 +297,21 @@ impl GuardedOracle {
         let Some(anchor) = load_anchor(&env, &asset) else {
             panic_with_error!(&env, OracleError::NoPrice);
         };
-        if env.ledger().timestamp().saturating_sub(anchor.timestamp) < MIN_POKE_SECS {
+        let after_secs = env.ledger().timestamp().saturating_sub(anchor.timestamp);
+        if after_secs < MIN_POKE_SECS {
             return;
         }
         let Some(quote) = Self::lastprice(env.clone(), asset.clone()) else {
             panic_with_error!(&env, OracleError::NoPrice);
         };
         store_anchor(&env, &asset, quote.price);
+        events::Poked {
+            asset: asset.clone(),
+            from: anchor.price,
+            to: quote.price,
+            after_secs,
+        }
+        .publish(&env);
         keep_alive(&env, &asset);
     }
 
