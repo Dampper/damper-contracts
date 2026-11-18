@@ -1,10 +1,23 @@
-# Damper — contracts
+<p align="center">
+  <img src="https://raw.githubusercontent.com/UbsOrg/.github/main/profile/damper-wordmark.png" alt="Damper" width="420">
+</p>
+
+# Damper Contracts
+
+[![CI](https://github.com/UbsOrg/damper-contracts/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/UbsOrg/damper-contracts/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) ![Stellar testnet](https://img.shields.io/badge/network-Stellar%20testnet-informational)
 
 Manipulation-resistant price oracle for Blend lending pools on Stellar.
 
 Damper is a SEP-40 price feed that a Blend pool can use as its oracle. It reads several upstream feeds, discards stale or broken ones, takes the median, and (in upcoming milestones) bounds sudden moves against a long-horizon anchor and refuses collateral prices whose market is cheaper to move than the pool is to drain.
 
 Companion repos: [damper-backend](https://github.com/UbsOrg/damper-backend) (keeper and pool scanner) · [damper-frontend](https://github.com/UbsOrg/damper-frontend) (pool risk dashboard).
+
+More documentation:
+
+- [Architecture](docs/ARCHITECTURE.md): contract surface, pricing, storage and roles
+- [Threat model](docs/THREAT_MODEL.md): what each party can and cannot do, and which risks are still open
+- [Decision records](docs/adr/README.md): why it is built this way
+- [Roadmap](ROADMAP.md) and [changelog](CHANGELOG.md)
 
 ## Why
 

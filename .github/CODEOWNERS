@@ -1,0 +1,7 @@
+# Default reviewer for everything
+*                          @MubyLateef
+
+# Oracle logic and security documents get a maintainer review
+/contracts/                @MubyLateef
+/docs/THREAT_MODEL.md      @MubyLateef
+/.github/                  @MubyLateef
