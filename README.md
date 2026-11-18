@@ -104,14 +104,17 @@ A demo deployment on Stellar testnet, with three admin-settable mock feeds stand
 
 | Contract | Address |
 |---|---|
-| Guarded oracle | `CBJLNEAOIIGMAQNWG7UZYMDLD5CR7ZTCFN3NILSWCY544WFHN65TBJQT` |
+| Guarded oracle, with the cost gate | `CCBCV5NCMEDCW4WPWF45P36JXZ7VV3QJR5T4X3CICJPGRYRDXKH636GQ` |
+| Earlier guarded oracle, before the gate | `CBJLNEAOIIGMAQNWG7UZYMDLD5CR7ZTCFN3NILSWCY544WFHN65TBJQT` |
 | Mock feeds | `CBEQGH2Y7YQWP3P4UYTQVTEBJ6TE7EB4LA73XUOXJZLME2MGSLCYGJTP`, `CABBBBRPUJLOQZLHBU5UUYNHXMZDURIY6I3Q44QYZSAHY6LOTEPD7QUE`, `CCOW6QR5MUQ5TYK6PAJZDOWCXROLNXWEIUGGTZ42SQL47L7ESSPDZSFB` |
 
-It prices the testnet XLM contract with a 5%/hour upward policy and a separate keeper address. What was run against it with the [keeper](https://github.com/Dampper/damper-backend#keeper):
+It prices the testnet XLM contract with a 5%/hour upward policy, a cost gate (tight rate 50 bps/hour, cost must be at least 2x the exposure) and a separate keeper address. What was run against them with the [keeper](https://github.com/Dampper/damper-backend#keeper):
 
-- the keeper's poke landed on ledger 5,791,954 once the anchor was past the 300 s minimum;
-- with all three feeds set to $106.74, `raw_price` returned $106.74 while `lastprice` returned $1.0624 (the $1.06 anchor plus the allowance for 160 s), and the keeper held its pokes and raised a critical `suspicious-move` alert;
-- a poke signed by the admin instead of the keeper is refused: the contract asks for the keeper's signature.
+- on the earlier oracle, the keeper's poke landed on ledger 5,791,954 once the anchor was past the 300 s minimum;
+- on the earlier oracle, with all three feeds set to $106.74, `raw_price` returned $106.74 while `lastprice` returned $1.0624 (the $1.06 anchor plus the allowance for 160 s), and the keeper held its pokes and raised a critical `suspicious-move` alert;
+- on the earlier oracle, a poke signed by the admin instead of the keeper is refused: the contract asks for the keeper's signature;
+- on the gated oracle, with no market evidence the effective upward rate is the tight 50 bps/hour. The keeper then read XLM's mainnet order book (about $504k to push the price up 10x), compared it with a $50M exposure, published that evidence at ledger 5,792,861 and raised a `gate-tight` alert;
+- with all three feeds then pumped to $106.74, the quote was $1.0604 under the tight rate. After the keeper published deep-market evidence ($100M cost against $50k exposure) the effective rate returned to the policy's 500 bps/hour and the quote was $1.0639, in the ratio the rates predict.
 
 ## Roadmap
 
