@@ -41,6 +41,34 @@ pub struct Config {
     pub min_sources: u32,
 }
 
+/// Sentinel for "no limit in this direction".
+pub const UNBOUNDED: u32 = u32::MAX;
+
+/// How far a quote may move away from the stored anchor, per asset.
+///
+/// Rates are in basis points per hour and apply to the time since the anchor was last
+/// moved, capped at `window_secs`. The allowance therefore grows with time but can never
+/// exceed `rate * window` between two pokes, so a price that has been pushed for hours
+/// still cannot jump by more than the policy allows.
+///
+/// - Collateral-side assets: bound `up`, leave `down` unbounded so liquidations keep working.
+/// - Debt-side assets: bound `down`, leave `up` unbounded.
+/// - Assets used both ways: bound both.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Policy {
+    pub up_bps_per_hour: u32,
+    pub down_bps_per_hour: u32,
+    pub window_secs: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Anchor {
+    pub price: i128,
+    pub timestamp: u64,
+}
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -49,4 +77,7 @@ pub enum OracleError {
     TooManySources = 2,
     NoSources = 3,
     DecimalsOutOfRange = 4,
+    InvalidPolicy = 5,
+    NoPrice = 6,
+    NoPolicy = 7,
 }

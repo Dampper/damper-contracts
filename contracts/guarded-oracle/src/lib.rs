@@ -2,13 +2,17 @@
 //! Damper guarded oracle.
 //!
 //! A SEP-40 price feed that sits between a lending pool and its upstream oracles.
-//! This first version takes the median of several fresh upstream prices and refuses
-//! to quote when too few are available. The anchor-relative clamp and the
-//! manipulation-cost gate described in the README are built on top of this.
+//! It takes the median of several fresh upstream prices, refuses to quote when too few
+//! are available, and (per asset, when a policy is set) bounds how fast the quote may
+//! move away from a stored anchor price. Collateral assets bound upward moves and let
+//! drops through, so a manipulated price cannot be borrowed against while a real crash
+//! still reaches the pool and liquidations keep working.
 
 mod aggregate;
 mod types;
 
+#[cfg(test)]
+mod replay;
 #[cfg(test)]
 mod test;
 
@@ -16,10 +20,15 @@ use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, panic_with_error, Address, Env, Vec,
 };
 
-pub use types::{Asset, Config, OracleError, PriceData, Source};
+pub use types::{Anchor, Asset, Config, OracleError, Policy, PriceData, Source, UNBOUNDED};
 
 pub const MAX_SOURCES: u32 = 7;
 const MAX_DECIMALS: u32 = 18;
+
+/// `poke` is a no-op more often than this. Anyone may call it, and moving the anchor
+/// resets the elapsed time that widens the band, so unlimited pokes could freeze it.
+pub const MIN_POKE_SECS: u64 = 300;
+const MAX_WINDOW_SECS: u64 = 7 * 24 * 3600;
 
 const DAY_LEDGERS: u32 = 17_280;
 const TTL_THRESHOLD: u32 = 30 * DAY_LEDGERS;
@@ -38,6 +47,8 @@ enum DataKey {
     Config,
     Assets,
     Sources(Asset),
+    Policy(Asset),
+    Anchor(Asset),
 }
 
 #[contract]
@@ -126,6 +137,60 @@ impl GuardedOracle {
             .unwrap_or(Vec::new(&env))
     }
 
+    /// Set how fast the quote for `asset` may move away from its anchor. After this the
+    /// asset returns no price until an anchor exists (`seed_anchor`).
+    pub fn set_policy(env: Env, asset: Asset, policy: Policy) {
+        load_config(&env).admin.require_auth();
+        if policy.window_secs == 0 || policy.window_secs > MAX_WINDOW_SECS {
+            panic_with_error!(&env, OracleError::InvalidPolicy);
+        }
+        let key = DataKey::Policy(asset);
+        env.storage().persistent().set(&key, &policy);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+
+    /// Admin: set the anchor for `asset` to the current unclamped median. This is the one
+    /// moment the clamp trusts the upstreams outright, so run it when the market is calm.
+    pub fn seed_anchor(env: Env, asset: Asset) {
+        load_config(&env).admin.require_auth();
+        let Some(p) = Self::raw_price(env.clone(), asset.clone()) else {
+            panic_with_error!(&env, OracleError::NoPrice);
+        };
+        store_anchor(&env, &asset, p.price);
+    }
+
+    /// Permissionless: move the anchor to the current clamped quote. Keepers call this
+    /// regularly so the anchor tracks real price changes at the policy's rate. It cannot
+    /// be used to move the anchor faster than the policy allows, and calls closer
+    /// together than `MIN_POKE_SECS` do nothing.
+    pub fn poke(env: Env, asset: Asset) {
+        let Some(anchor) = load_anchor(&env, &asset) else {
+            panic_with_error!(&env, OracleError::NoPrice);
+        };
+        if env.ledger().timestamp().saturating_sub(anchor.timestamp) < MIN_POKE_SECS {
+            return;
+        }
+        let Some(quote) = Self::lastprice(env.clone(), asset.clone()) else {
+            panic_with_error!(&env, OracleError::NoPrice);
+        };
+        store_anchor(&env, &asset, quote.price);
+    }
+
+    pub fn policy(env: Env, asset: Asset) -> Option<Policy> {
+        env.storage().persistent().get(&DataKey::Policy(asset))
+    }
+
+    pub fn anchor(env: Env, asset: Asset) -> Option<Anchor> {
+        load_anchor(&env, &asset)
+    }
+
+    /// The median before any clamp, for monitoring and for `seed_anchor`.
+    pub fn raw_price(env: Env, asset: Asset) -> Option<PriceData> {
+        median_price(&env, asset)
+    }
+
     pub fn config(env: Env) -> Config {
         load_config(&env)
     }
@@ -158,41 +223,76 @@ impl GuardedOracle {
         None
     }
 
-    /// Median of all fresh upstream prices, or `None` if fewer than `min_sources`
-    /// upstreams returned a usable price. The returned timestamp is the oldest of the
-    /// prices used, so staleness checks downstream stay conservative.
+    /// The median of fresh upstream prices, bounded by the asset's policy when it has one.
+    /// `None` when too few upstreams answer, or when a policy exists but no anchor has
+    /// been seeded. The returned timestamp is the oldest price used, so staleness checks
+    /// downstream stay conservative.
     pub fn lastprice(env: Env, asset: Asset) -> Option<PriceData> {
-        let config = load_config(&env);
-        let sources: Vec<Source> = env.storage().persistent().get(&DataKey::Sources(asset))?;
-        let now = env.ledger().timestamp();
-
-        let mut prices = Vec::new(&env);
-        let mut oldest = u64::MAX;
-        for source in sources.iter() {
-            let client = UpstreamClient::new(&env, &source.oracle);
-            // A reverting or malformed upstream must not take the whole feed down.
-            let Ok(Ok(Some(p))) = client.try_lastprice(&source.asset) else {
-                continue;
-            };
-            if p.timestamp > now || now - p.timestamp > config.max_age {
-                continue;
-            }
-            let Some(normalized) = aggregate::normalize(p.price, source.decimals, config.decimals)
-            else {
-                continue;
-            };
-            prices.push_back(normalized);
-            oldest = oldest.min(p.timestamp);
-        }
-
-        if prices.len() < config.min_sources {
-            return None;
-        }
-        aggregate::median(&prices).map(|price| PriceData {
+        let median = median_price(&env, asset.clone())?;
+        let Some(policy) = Self::policy(env.clone(), asset.clone()) else {
+            return Some(median);
+        };
+        let anchor = load_anchor(&env, &asset)?;
+        let elapsed = env.ledger().timestamp().saturating_sub(anchor.timestamp);
+        let price = aggregate::clamp(median.price, anchor.price, elapsed, &policy);
+        Some(PriceData {
             price,
-            timestamp: oldest,
+            timestamp: median.timestamp,
         })
     }
+}
+
+/// Median of all fresh upstream prices, or `None` if fewer than `min_sources`
+/// upstreams returned a usable price.
+fn median_price(env: &Env, asset: Asset) -> Option<PriceData> {
+    let config = load_config(env);
+    let sources: Vec<Source> = env.storage().persistent().get(&DataKey::Sources(asset))?;
+    let now = env.ledger().timestamp();
+
+    let mut prices = Vec::new(env);
+    let mut oldest = u64::MAX;
+    for source in sources.iter() {
+        let client = UpstreamClient::new(env, &source.oracle);
+        // A reverting or malformed upstream must not take the whole feed down.
+        let Ok(Ok(Some(p))) = client.try_lastprice(&source.asset) else {
+            continue;
+        };
+        if p.timestamp > now || now - p.timestamp > config.max_age {
+            continue;
+        }
+        let Some(normalized) = aggregate::normalize(p.price, source.decimals, config.decimals)
+        else {
+            continue;
+        };
+        prices.push_back(normalized);
+        oldest = oldest.min(p.timestamp);
+    }
+
+    if prices.len() < config.min_sources {
+        return None;
+    }
+    aggregate::median(&prices).map(|price| PriceData {
+        price,
+        timestamp: oldest,
+    })
+}
+
+fn load_anchor(env: &Env, asset: &Asset) -> Option<Anchor> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Anchor(asset.clone()))
+}
+
+fn store_anchor(env: &Env, asset: &Asset, price: i128) {
+    let key = DataKey::Anchor(asset.clone());
+    let anchor = Anchor {
+        price,
+        timestamp: env.ledger().timestamp(),
+    };
+    env.storage().persistent().set(&key, &anchor);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
 fn load_config(env: &Env) -> Config {

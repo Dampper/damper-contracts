@@ -50,8 +50,8 @@ impl RevertingFeed {
 
 // ---------------------------------------------------------------- helpers
 
-const NOW: u64 = 1_800_000_000;
-const MAX_AGE: u64 = 900;
+pub(crate) const NOW: u64 = 1_800_000_000;
+pub(crate) const MAX_AGE: u64 = 900;
 
 struct Setup<'a> {
     env: Env,
@@ -75,7 +75,7 @@ fn setup(min_sources: u32) -> Setup<'static> {
     Setup { env, oracle, asset }
 }
 
-fn feed(env: &Env, decimals: u32) -> MockFeedClient<'static> {
+pub(crate) fn feed(env: &Env, decimals: u32) -> MockFeedClient<'static> {
     let id = env.register(MockFeed, (decimals,));
     MockFeedClient::new(env, &id)
 }
@@ -190,4 +190,85 @@ fn median_math() {
     assert_eq!(aggregate::normalize(15, 8, 7), Some(1));
     assert_eq!(aggregate::normalize(9, 8, 7), None, "rounds to zero");
     assert_eq!(aggregate::normalize(i128::MAX, 0, 18), None, "overflow");
+}
+
+// ---------------------------------------------------------------- clamp math
+
+mod clamp_math {
+    use crate::{aggregate::clamp, Policy, UNBOUNDED};
+
+    fn up_only(rate: u32) -> Policy {
+        Policy {
+            up_bps_per_hour: rate,
+            down_bps_per_hour: UNBOUNDED,
+            window_secs: 24 * 3600,
+        }
+    }
+
+    #[test]
+    fn no_time_no_upward_room() {
+        assert_eq!(clamp(2_000, 1_000, 0, &up_only(500)), 1_000);
+    }
+
+    #[test]
+    fn upward_room_grows_linearly_with_time() {
+        // 500 bps/hour: +5% after 1h, +10% after 2h
+        assert_eq!(clamp(9_999_999, 1_000_000, 3600, &up_only(500)), 1_050_000);
+        assert_eq!(clamp(9_999_999, 1_000_000, 7200, &up_only(500)), 1_100_000);
+    }
+
+    #[test]
+    fn room_is_capped_at_the_window() {
+        let p = up_only(500);
+        assert_eq!(
+            clamp(i128::MAX / 2, 1_000_000, 24 * 3600, &p),
+            clamp(i128::MAX / 2, 1_000_000, 365 * 24 * 3600, &p)
+        );
+    }
+
+    #[test]
+    fn prices_inside_the_band_are_untouched() {
+        assert_eq!(clamp(1_020_000, 1_000_000, 3600, &up_only(500)), 1_020_000);
+    }
+
+    #[test]
+    fn drops_pass_when_down_is_unbounded() {
+        assert_eq!(clamp(1, 1_000_000, 0, &up_only(500)), 1);
+    }
+
+    #[test]
+    fn downward_bound_mirrors_upward() {
+        let p = Policy {
+            up_bps_per_hour: UNBOUNDED,
+            down_bps_per_hour: 500,
+            window_secs: 24 * 3600,
+        };
+        assert_eq!(clamp(1, 1_000_000, 3600, &p), 950_000);
+        assert_eq!(clamp(5_000_000, 1_000_000, 0, &p), 5_000_000);
+    }
+
+    #[test]
+    fn downward_bound_never_reaches_zero() {
+        let p = Policy {
+            up_bps_per_hour: UNBOUNDED,
+            down_bps_per_hour: 100_000, // would be -1000% per hour
+            window_secs: 3600,
+        };
+        assert_eq!(clamp(1, 1_000_000, 3600, &p), 1);
+    }
+
+    #[test]
+    fn short_intervals_do_not_round_to_zero() {
+        // 300s at 500 bps/hour is 41.67 bps; on a 1e12 anchor that is 4.1e9, not 0
+        assert_eq!(
+            clamp(i128::MAX / 2, 1_000_000_000_000, 300, &up_only(500)),
+            1_000_000_000_000 + 4_166_666_666
+        );
+    }
+
+    #[test]
+    fn huge_anchors_saturate_instead_of_overflowing() {
+        let big = i128::MAX / 4;
+        assert!(clamp(i128::MAX, big, 24 * 3600, &up_only(u32::MAX - 1)) >= big);
+    }
 }
