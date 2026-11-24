@@ -16,3 +16,4 @@ All notable changes to this repository are listed here. The format follows [Keep
 - Replay of the February 2026 YieldBlox exploit against a minimal lending pool, with controls and mutation checks.
 - `damper-mock-feed`: admin-settable SEP-40 feed for testnet demos.
 - Testnet demo deployment, documented in the README.
+- The testnet demo's clamp rate, tight rate and cost ratio, previously placeholders, fitted to 180 days of real XLM/USDC trade history and the backend scanner's own risk tiers (ADR 0005).

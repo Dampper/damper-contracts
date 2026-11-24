@@ -77,7 +77,7 @@ The fourth row is the reason the clamp exists: a median cannot help when several
 
 - **Failing closed vs. open.** Blend unwraps `lastprice`; `None` reverts every pool action touching that asset, including liquidations. The clamp is meant to keep quoting a bounded price rather than return `None`, but the right behaviour when quorum is lost is still open.
 - **Sustained manipulation drags the anchor.** The clamp turns a one-trade exploit into one that costs the attacker a day of holding a pumped price. It does not make manipulation impossible. The cost gate tightens the rate where holding a price is cheap (about $122k borrowable after 24 hours on a thin market, against about $350k), but it rests on an estimate of cost, and a deep market can be thinned.
-- **Rates need real data.** 500 bps per hour is a placeholder. Reasonable rates depend on each asset's historical volatility; the backend scanner is where those measurements will come from.
+- **Rates need real data.** The testnet demo's XLM rates are now fitted to 180 days of real XLM/USDC trade history and the backend scanner's own risk tiers rather than picked for legibility; see [ADR 0005](docs/adr/0005-rates-fitted-to-real-data.md). A different asset, or a different market regime, needs its own pull of that analysis — nothing here is permanent, and these numbers are a demo's, not a contract default.
 - **`poke` is not permissionless.** Each poke moves the anchor to the current quote, so whoever pokes chooses how fast the anchor compounds. Under a held 5%/hour pump, poking every five minutes takes the anchor to 3.3x in a day, while an unpoked band stops at 2.2x. Letting an attacker choose the first would hand them the faster path, so only a configured keeper can poke. If the keeper stops, the anchor goes stale and quotes get more cautious.
 - **Seeding is a trust point.** `seed_anchor` takes the unclamped median, so it must run while the market is calm.
 - **Legitimate fast rallies.** An asset that really doubles in an hour will be undervalued as collateral for a while. That is the conservative direction for the pool and the cost to borrowers.
@@ -111,13 +111,14 @@ A demo deployment on Stellar testnet, with three admin-settable mock feeds stand
 | Earlier guarded oracle, before the gate | `CBJLNEAOIIGMAQNWG7UZYMDLD5CR7ZTCFN3NILSWCY544WFHN65TBJQT` |
 | Mock feeds | `CBEQGH2Y7YQWP3P4UYTQVTEBJ6TE7EB4LA73XUOXJZLME2MGSLCYGJTP`, `CABBBBRPUJLOQZLHBU5UUYNHXMZDURIY6I3Q44QYZSAHY6LOTEPD7QUE`, `CCOW6QR5MUQ5TYK6PAJZDOWCXROLNXWEIUGGTZ42SQL47L7ESSPDZSFB` |
 
-It prices the testnet XLM contract with a 5%/hour upward policy, a cost gate (tight rate 50 bps/hour, cost must be at least 2x the exposure) and a separate keeper address. What was run against them with the [keeper](https://github.com/Dampper/damper-backend#keeper):
+It prices the testnet XLM contract with a 15%/hour upward policy, a cost gate (tight rate 1.5%/hour, cost must be at least 10x the exposure) and a separate keeper address. These rates replaced an earlier 5%/hour / 0.5%/hour / 2x placeholder once fitted to real XLM/USDC trade history and the backend's own risk tiers; see [ADR 0005](docs/adr/0005-rates-fitted-to-real-data.md). What was run against them with the [keeper](https://github.com/Dampper/damper-backend#keeper):
 
 - on the earlier oracle, the keeper's poke landed on ledger 5,791,954 once the anchor was past the 300 s minimum;
 - on the earlier oracle, with all three feeds set to $106.74, `raw_price` returned $106.74 while `lastprice` returned $1.0624 (the $1.06 anchor plus the allowance for 160 s), and the keeper held its pokes and raised a critical `suspicious-move` alert;
 - on the earlier oracle, a poke signed by the admin instead of the keeper is refused: the contract asks for the keeper's signature;
-- on the gated oracle, with no market evidence the effective upward rate is the tight 50 bps/hour. The keeper then read XLM's mainnet order book (about $504k to push the price up 10x), compared it with a $50M exposure, published that evidence at ledger 5,792,861 and raised a `gate-tight` alert;
-- with all three feeds then pumped to $106.74, the quote was $1.0604 under the tight rate. After the keeper published deep-market evidence ($100M cost against $50k exposure) the effective rate returned to the policy's 500 bps/hour and the quote was $1.0639, in the ratio the rates predict.
+- with the rates refitted (`set_policy` at ledger 5,891,654, `set_gate` at ledger 5,891,656) and the anchor reseeded to $1.06 at ledger 5,891,679, all three feeds were pumped to $106.74 (ledger 5,891,684). With no fresh evidence the effective upward rate is the tight 1.5%/hour;
+- the keeper then read XLM's real mainnet order book (about $403.5k to push the price up 10x), compared it with a $50M exposure (ratio 8.1x, under the new 10x bar) and published that evidence at ledger 5,891,698, raising `gate-tight`; the quote stayed on the tight rate;
+- fresh evidence against a $30k exposure instead (ratio 134x, clearing the bar) was published at ledger 5,891,708. The effective rate returned to the policy's 15%/hour and the quote read $1.0664041 — the keeper's own evidence-freshness guard correctly refused to republish over evidence it had just sent as still fresh, so this step used `publish_evidence` directly as the keeper key instead of a second keeper pass.
 
 ## Roadmap
 

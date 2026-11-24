@@ -16,4 +16,4 @@ Each asset can carry a policy: a rate in basis points per hour for upward moves,
 - A legitimate rally is rate-limited. That undervalues collateral for a while, which is the conservative direction for the pool.
 - The window caps how wide the band can grow when nobody pokes, so a stale anchor cannot become permission for any price.
 - The anchor can be walked toward a price that is held for hours. The clamp turns a one-trade exploit into one that costs the attacker time; it does not make manipulation impossible.
-- Rates are placeholders until they are fitted to each asset's real volatility.
+- Rates were placeholders until they were fitted to each asset's real volatility; see [0005](0005-rates-fitted-to-real-data.md).

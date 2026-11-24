@@ -8,3 +8,4 @@ Short notes on why the contract is built the way it is. Each records the context
 | [0002](0002-asymmetric-anchor-clamp.md) | Asymmetric clamp around an anchor | Accepted |
 | [0003](0003-keeper-only-anchor-updates.md) | Only a keeper can move the anchor | Accepted |
 | [0004](0004-cost-gate-tightens-never-loosens.md) | A cost gate that only tightens | Accepted |
+| [0005](0005-rates-fitted-to-real-data.md) | Fit the clamp and gate rates to measured data, not placeholders | Accepted |
