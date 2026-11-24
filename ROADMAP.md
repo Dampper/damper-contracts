@@ -13,8 +13,7 @@ Status of the contracts. The repository README carries the design; this file tra
 - **Fit the rates and ratios to data.** The clamp rates, tight rates and the required cost ratio are placeholders. Fit them per asset from price history and measured depth.
 - **Historical lookups.** `price` and `prices` return nothing. Anything that needs time-weighted prices from Damper itself will need an on-chain history.
 - **Coverage-guided fuzzing and formal verification.** The property tests sample inputs; `cargo-fuzz` targets and a verifier such as Kani would explore the arithmetic more systematically.
-- **Testnet with a real Blend pool** using Damper as its oracle, then an external review.
-
 ## Later
 
+- **A real Blend pool on testnet using Damper as its oracle.** Blocked, not abandoned: testnet BLND has no faucet and almost no DEX depth, and the Backstop Bootstrapper contract only splits a deposit between two parties, it does not supply the tokens. Revisit if Blend's testnet BLND/USDC becomes available another way (their Discord, most likely), or if the project later wants a self-deployed mock Comet/backstop stack purely to prove the integration — that would be a sandbox we control, not Blend's real shared testnet, so it stands on its own rather than as evidence. The project's actual evidence does not depend on this: the scanner already analyzes real, live mainnet Blend pools, and the YieldBlox replay is real history.
 - NAV-attested feeds for regulated real-world assets, so they can be priced without relying on thin DEX markets.
