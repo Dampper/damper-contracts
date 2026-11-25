@@ -1,0 +1,38 @@
+[workspace]
+
+[package]
+name = "damper-guarded-oracle-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+libfuzzer-sys = "0.4"
+
+[dependencies.damper-guarded-oracle]
+path = ".."
+
+[[bin]]
+name = "clamp"
+path = "fuzz_targets/clamp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gate"
+path = "fuzz_targets/gate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "effective_policy"
+path = "fuzz_targets/effective_policy.rs"
+test = false
+doc = false
+bench = false

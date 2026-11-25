@@ -15,6 +15,9 @@
 //! `proptest-regressions/`; commit that file so the case is replayed from then on.
 
 use crate::aggregate::{clamp, effective_policy, median, normalize, uneconomic};
+use crate::reference::{
+    cut, exact_uneconomic, reference_band, reference_clamp, reference_effective, within_exact_range,
+};
 use crate::test::{feed, MockFeedClient, MAX_AGE, NOW};
 use crate::{
     Asset, Evidence, Gate, GuardedOracle, GuardedOracleClient, Policy, UNBOUNDED, UNLIMITED,
@@ -26,8 +29,6 @@ use soroban_sdk::{
 };
 
 const WEEK: u64 = 7 * 24 * 3600;
-/// `anchor * rate_bps * secs / (3600 * 10_000)`: the contract's band, as an exact reference.
-const DEN: u128 = 36_000_000;
 
 fn config(default_cases: u32) -> ProptestConfig {
     let mut c = ProptestConfig::default(); // honours PROPTEST_CASES
@@ -134,92 +135,9 @@ fn evidence(now: u64) -> impl Strategy<Value = Option<Evidence>> {
     ]
 }
 
-// ------------------------------------------------------------------ reference gate
-
-/// `a * b` as a 256-bit number `(high, low)`, so the reference can compare products that do not
-/// fit in 128 bits.
-fn mul_wide(a: u128, b: u128) -> (u128, u128) {
-    const MASK: u128 = u64::MAX as u128;
-    let (a0, a1) = (a & MASK, a >> 64);
-    let (b0, b1) = (b & MASK, b >> 64);
-    let (p00, p01, p10, p11) = (a0 * b0, a0 * b1, a1 * b0, a1 * b1);
-    let mid = (p00 >> 64) + (p01 & MASK) + (p10 & MASK);
-    let lo = (p00 & MASK) | (mid << 64);
-    let hi = p11 + (p01 >> 64) + (p10 >> 64) + (mid >> 64);
-    (hi, lo)
-}
-
-/// `cost * 10_000 >= exposure * ratio`, exactly, for any `i128` amounts. An exposure of zero or
-/// less means there is nothing to take; `UNLIMITED` is a price trading cannot move.
-fn exact_uneconomic(cost: i128, exposure: i128, ratio: u32) -> bool {
-    if cost == UNLIMITED || exposure <= 0 {
-        return true;
-    }
-    if cost <= 0 {
-        return false;
-    }
-    mul_wide(cost as u128, 10_000) >= mul_wide(exposure as u128, ratio as u128)
-}
-
-/// The amounts for which the contract is exact. `cost * 10_000` saturates, and a saturated
-/// product is still at least any `exposure * ratio` that fits in 128 bits, so a huge cost is
-/// handled exactly. Only an exposure large enough for `exposure * ratio` to overflow (above
-/// 2^95, given a ratio up to 2^32) can make the contract err towards the tight rate.
-fn within_exact_range(cost: i128, exposure: i128) -> bool {
-    cost == UNLIMITED || exposure < (1i128 << 95)
-}
-
-/// A bounded direction is cut to the tight rate; a free direction stays free.
-fn cut(policy_rate: u32, tight: u32) -> u32 {
-    if policy_rate == UNBOUNDED {
-        UNBOUNDED
-    } else {
-        policy_rate.min(tight)
-    }
-}
-
-/// The gate's rule, written from its description in the docs rather than from the contract's
-/// code: a bounded direction keeps its policy rate only while *fresh* evidence says an attack
-/// costs at least `min_cost_ratio_bps / 10_000` times what it unlocks; otherwise it is cut to
-/// the tight rate. A direction the policy leaves free stays free.
-fn reference_effective(policy: &Policy, gate: &Gate, ev: Option<&Evidence>, now: u64) -> Policy {
-    let fresh = ev.filter(|e| e.timestamp <= now && now - e.timestamp <= gate.max_evidence_age);
-    let direction = |policy_rate: u32, tight: u32, cost_exposure: Option<(i128, i128)>| -> u32 {
-        if policy_rate == UNBOUNDED {
-            return UNBOUNDED;
-        }
-        let keeps = match cost_exposure {
-            None => false,
-            Some((cost, exposure)) => exact_uneconomic(cost, exposure, gate.min_cost_ratio_bps),
-        };
-        if keeps {
-            policy_rate
-        } else {
-            cut(policy_rate, tight)
-        }
-    };
-    Policy {
-        up_bps_per_hour: direction(
-            policy.up_bps_per_hour,
-            gate.tight_up_bps_per_hour,
-            fresh.map(|e| (e.up_cost, e.up_exposure)),
-        ),
-        down_bps_per_hour: direction(
-            policy.down_bps_per_hour,
-            gate.tight_down_bps_per_hour,
-            fresh.map(|e| (e.down_cost, e.down_exposure)),
-        ),
-        window_secs: policy.window_secs,
-    }
-}
-
-// ------------------------------------------------------------------ clamp
-
-/// The band the policy allows, written out independently of the contract's code.
-fn reference_band(anchor: i128, rate: u32, secs: u64, window: u64) -> u128 {
-    let secs = secs.min(window) as u128;
-    anchor as u128 * rate as u128 * secs / DEN
-}
+// The reference arithmetic (`mul_wide`, `exact_uneconomic`, `within_exact_range`, `cut`,
+// `reference_effective`, `reference_band`, `reference_clamp`) lives in `reference.rs`, shared
+// with the coverage-guided fuzz targets under `fuzz/`.
 
 proptest! {
     #![proptest_config(config(2_000))]
@@ -248,17 +166,7 @@ proptest! {
         window in 1u64..=WEEK,
     ) {
         let policy = Policy { up_bps_per_hour: up, down_bps_per_hour: down, window_secs: window };
-        let mut want = price;
-        if up != UNBOUNDED {
-            let hi = anchor + reference_band(anchor, up, elapsed, window) as i128;
-            want = want.min(hi);
-        }
-        if down != UNBOUNDED {
-            // moving down by 100% or more would reach zero, so the allowance is capped at the anchor
-            let allow = (reference_band(anchor, down, elapsed, window) as i128).min(anchor);
-            want = want.max((anchor - allow).max(1));
-        }
-        prop_assert_eq!(clamp(price, anchor, elapsed, &policy), want);
+        prop_assert_eq!(clamp(price, anchor, elapsed, &policy), reference_clamp(price, anchor, elapsed, &policy));
     }
 
     /// A higher input price never produces a lower quote.

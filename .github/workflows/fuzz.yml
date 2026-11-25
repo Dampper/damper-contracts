@@ -1,7 +1,8 @@
 name: Deep fuzz
 
-# A much deeper search than CI's per-push run. Runs weekly and on demand. If a property fails,
-# the shrunk failing input (proptest-regressions) is uploaded so it can be committed with the fix.
+# A much deeper search than CI's per-push run: the property and stateful tests at far more
+# cases (random sampling), and separately, coverage-guided fuzzing of the same pure math with
+# cargo-fuzz (ADR 0006), which explores by code path instead. Runs weekly and on demand.
 
 on:
   schedule:
@@ -14,9 +15,12 @@ on:
       stateful:
         description: Random operation sequences against the contract
         default: '250'
+      fuzz_secs:
+        description: Seconds per cargo-fuzz target
+        default: '600'
 
 jobs:
-  fuzz:
+  proptest:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -34,4 +38,29 @@ jobs:
         with:
           name: proptest-regressions
           path: contracts/guarded-oracle/proptest-regressions/
+          if-no-files-found: ignore
+
+  cargo-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/guarded-oracle/fuzz
+      - run: cargo install cargo-fuzz --locked
+      - name: Coverage-guided fuzzing of the clamp, the gate and effective_policy
+        working-directory: contracts/guarded-oracle
+        run: |
+          secs="${{ github.event.inputs.fuzz_secs || '600' }}"
+          for target in clamp gate effective_policy; do
+            cargo fuzz run "$target" -- -max_total_time="$secs"
+          done
+      - name: Keep any crashing case
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-fuzz-artifacts
+          path: contracts/guarded-oracle/fuzz/artifacts/
           if-no-files-found: ignore

@@ -295,6 +295,37 @@ mod clamp_math {
         let big = i128::MAX / 4;
         assert!(clamp(i128::MAX, big, 24 * 3600, &up_only(u32::MAX - 1)) >= big);
     }
+
+    /// `cargo-fuzz`'s `clamp` target (ADR 0006), first run: with an unconstrained `i128` anchor
+    /// (the property tests' `price()`/`anchor()` strategies only ever generate positive values,
+    /// so this domain had never been exercised), a negative anchor made the band arithmetic's
+    /// overflow fallback produce a value with the wrong sign, and the result landed far outside
+    /// `[price, anchor]` — here, positive when both inputs were deeply negative.
+    #[test]
+    fn a_non_positive_anchor_falls_back_to_the_floor_instead_of_a_wrong_sign() {
+        let p = Policy {
+            up_bps_per_hour: 3_250_700_737,
+            down_bps_per_hour: 3_250_700_737,
+            window_secs: 13_907_115_649_320_141_249,
+        };
+        let price = -82_735_320_584_698_763_665_604_806_512_822_075_126;
+        let anchor = -82_735_320_584_698_763_665_604_806_512_822_074_943;
+        assert_eq!(clamp(price, anchor, 13_961_653_357_748_797_889, &p), 1);
+    }
+
+    /// `cargo-fuzz`'s `clamp` target (ADR 0006), second run: with a valid (positive) anchor but
+    /// both directions `UNBOUNDED`, a non-positive price skipped the only branch that floors the
+    /// result (the down branch), so it passed straight through, unfloored.
+    #[test]
+    fn a_non_positive_price_still_floors_at_one_when_both_directions_are_unbounded() {
+        let p = Policy {
+            up_bps_per_hour: UNBOUNDED,
+            down_bps_per_hour: UNBOUNDED,
+            window_secs: u64::MAX,
+        };
+        assert_eq!(clamp(-246, i128::MAX / 2, u64::MAX, &p), 1);
+        assert_eq!(clamp(0, 1_000_000, 0, &p), 1);
+    }
 }
 
 // ---------------------------------------------------------------- keeper auth
@@ -450,6 +481,24 @@ mod gate_math {
         let cost = 34_028_236_692_093_846_346_337_460_743_176_822_i128;
         assert!(uneconomic(cost, 1, 1));
         assert!(uneconomic(cost, 1_000_000_000_000, 20_000));
+    }
+
+    /// `cargo-fuzz`'s `gate` target (ADR 0006): with `min_cost_ratio_bps` left unconstrained
+    /// (every proptest generator restricts it to `1..=100_000`, matching `set_gate`'s own
+    /// rejection of 0, so this value had never been tried), a ratio of 0 made a free (zero-cost)
+    /// attack against real exposure read as uneconomic: `exposure * 0 == 0`, and
+    /// `cost.saturating_mul(10_000)` is also 0 when cost is 0, so `0 >= 0` passed. Unreachable
+    /// through `set_gate` today, but a free attack against something worth taking must never
+    /// read as safe regardless of how it is reached.
+    #[test]
+    fn a_free_attack_against_real_exposure_is_never_uneconomic() {
+        assert!(!uneconomic(
+            0,
+            13_362_324_784_046_394_687_261_146_873_856,
+            0
+        ));
+        assert!(!uneconomic(0, 1, 1));
+        assert!(!uneconomic(-1, 1, 1));
     }
 
     #[test]

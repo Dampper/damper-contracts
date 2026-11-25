@@ -49,8 +49,22 @@ pub fn median(values: &Vec<i128>) -> Option<i128> {
 ///
 /// `elapsed` is the time since the anchor was last moved. The band is
 /// `anchor * (1 +/- rate * min(elapsed, window) / 1h)` with the rate in basis points.
-/// A lower bound of zero is lifted to 1 so the quote never becomes non-positive.
+/// The result is never less than 1, unconditionally: both `price` and `anchor` are always
+/// positive in practice (`normalize`/`median` and this function itself never produce anything
+/// else), but the floor does not depend on that holding to still return a sane, positive quote
+/// rather than propagate a non-positive one.
+///
+/// Requires a positive `anchor`: a percentage band only means something around a positive
+/// reference price. A non-positive one should therefore never reach here; defensively, this
+/// returns the floor of 1 rather than running arithmetic whose sign assumptions do not hold,
+/// which coverage-guided fuzzing found could otherwise produce a quote wildly outside
+/// `[price, anchor]` (see ADR 0006). The same fuzzing found a second gap with a valid anchor: a
+/// non-positive `price` together with `down_bps_per_hour == UNBOUNDED` skipped the only branch
+/// that floors the result, so the final floor below is unconditional, not just the down branch's.
 pub fn clamp(price: i128, anchor: i128, elapsed: u64, policy: &Policy) -> i128 {
+    if anchor <= 0 {
+        return 1;
+    }
     let secs = elapsed.min(policy.window_secs) as u128;
     let mut out = price;
 
@@ -63,7 +77,7 @@ pub fn clamp(price: i128, anchor: i128, elapsed: u64, policy: &Policy) -> i128 {
         let lo = anchor - band(anchor, policy.down_bps_per_hour, secs).min(anchor);
         out = out.max(lo.max(1));
     }
-    out
+    out.max(1)
 }
 
 /// `anchor * rate_bps * secs / (3600 * 10_000)`, done in a single division so short
@@ -81,9 +95,16 @@ fn band(anchor: i128, rate_bps: u32, secs: u128) -> i128 {
 
 /// True when moving the price costs at least `min_ratio_bps / 10_000` times what it would let
 /// an attacker borrow. Nothing to take, or a price that trading cannot move, is uneconomic.
+/// A free (non-positive) cost against something worth taking never is: `set_gate` already
+/// rejects `min_ratio_bps == 0`, but without this guard that combination made a free attack
+/// against real exposure read as uneconomic anyway (`0 * ratio == cost.saturating_mul(10_000)`
+/// when cost is 0 too), which coverage-guided fuzzing found (see ADR 0006).
 pub fn uneconomic(cost: i128, exposure: i128, min_ratio_bps: u32) -> bool {
     if cost == UNLIMITED || exposure <= 0 {
         return true;
+    }
+    if cost <= 0 {
+        return false;
     }
     match exposure.checked_mul(min_ratio_bps as i128) {
         Some(required) => cost.saturating_mul(10_000) >= required,

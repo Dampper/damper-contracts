@@ -3,3 +3,6 @@
 .soroban/
 .stellar/
 .env
+contracts/*/fuzz/target/
+contracts/*/fuzz/corpus/
+contracts/*/fuzz/artifacts/

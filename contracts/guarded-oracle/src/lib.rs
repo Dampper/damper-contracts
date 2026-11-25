@@ -8,8 +8,9 @@
 //! drops through, so a manipulated price cannot be borrowed against while a real crash
 //! still reaches the pool and liquidations keep working.
 
-mod aggregate;
+pub mod aggregate;
 mod events;
+pub mod reference;
 mod types;
 
 // the property tests need std, which the contract itself never links

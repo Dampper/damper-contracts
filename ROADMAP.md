@@ -8,11 +8,13 @@ Status of the contracts. The repository README carries the design; this file tra
 - **Manipulation-cost gate.** The keeper publishes market evidence and the oracle tightens its clamp where an attack would pay. It can only tighten.
 - **Property tests and stateful fuzzing** of the clamp, the gate and the whole contract, with a weekly deep run.
 - **Fit the rates and ratios to data.** The testnet demo's clamp rate, tight rate and cost ratio were placeholders; they are now fitted to 180 days of real XLM/USDC trade history and the backend scanner's own risk tiers ([ADR 0005](docs/adr/0005-rates-fitted-to-real-data.md)). This is one asset's numbers from one market, not a contract default — a different asset needs its own pull of the same analysis.
+- **Coverage-guided fuzzing** of the clamp, the gate and `effective_policy` with `cargo-fuzz`, run weekly alongside the property tests ([ADR 0006](docs/adr/0006-coverage-guided-fuzzing.md)).
 
 ## Next
 
 - **Historical lookups.** `price` and `prices` return nothing. Anything that needs time-weighted prices from Damper itself will need an on-chain history.
-- **Coverage-guided fuzzing and formal verification.** The property tests sample inputs; `cargo-fuzz` targets and a verifier such as Kani would explore the arithmetic more systematically.
+- **Formal verification.** Coverage-guided fuzzing still samples (more systematically than random, but still execution, not proof); a verifier such as Kani would prove properties like "the clamp never panics" for every input, not just every input tried.
+- **Coverage-guided fuzzing of the host-facing entry points.** The cargo-fuzz targets reach the pure math only; the contract's `#[contractimpl]` methods (`poke`, `set_policy`, ...) are covered by the stateful property test, but not by a coverage-guided one, since that needs a full Soroban `Env` per iteration rather than a single structured value.
 
 ## Later
 

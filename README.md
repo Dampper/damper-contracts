@@ -90,7 +90,7 @@ Admin: `set_sources(asset, Vec<(upstream_oracle, upstream_asset)>)`, `set_policy
 
 ## Build and test
 
-The tests run in four layers: unit tests, the YieldBlox replay, property tests that check rules for every input, and a stateful fuzz test that throws random sequences of events at the deployed contract and checks its invariants after every step ([docs/TESTING.md](docs/TESTING.md)). A weekly workflow runs a much deeper search.
+The tests run in four layers: unit tests, the YieldBlox replay, property tests that check rules for every input, and a stateful fuzz test that throws random sequences of events at the deployed contract and checks its invariants after every step ([docs/TESTING.md](docs/TESTING.md)). A weekly workflow runs a much deeper search of these by random sampling, and separately, `cargo-fuzz` targets explore the clamp and the gate by code path instead ([ADR 0006](docs/adr/0006-coverage-guided-fuzzing.md)).
 
 `contracts/mock-feed` is an admin-settable SEP-40 feed for testnet demos and keeper tests; it must never back a real pool.
 
