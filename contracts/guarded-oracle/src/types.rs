@@ -104,6 +104,25 @@ pub struct Gate {
     pub max_evidence_age: u64,
 }
 
+/// Everything a keeper reads for one asset, in the shape the separate `policy`,
+/// `effective_policy`, `anchor`, `raw_price`, `lastprice`, `gate` and `evidence` views
+/// already return, gathered into one read-only call (issue #21). Reading it costs no more
+/// than one `lastprice` call: every field here is already computed, not re-derived.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetStatus {
+    pub policy: Option<Policy>,
+    /// The policy actually in force right now, after the gate. `None` exactly when `policy` is.
+    pub effective_policy: Option<Policy>,
+    pub anchor: Option<Anchor>,
+    /// The median of fresh upstream prices, before any clamp.
+    pub raw_price: Option<PriceData>,
+    /// What `lastprice` returns right now: the raw median, clamped when the asset has a policy.
+    pub quote: Option<PriceData>,
+    pub gate: Option<Gate>,
+    pub evidence: Option<Evidence>,
+}
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]

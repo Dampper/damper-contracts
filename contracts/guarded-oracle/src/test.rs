@@ -1,6 +1,9 @@
 #![cfg(test)]
 
-use crate::{aggregate, Asset, GuardedOracle, GuardedOracleClient, Policy, PriceData, UNBOUNDED};
+use crate::{
+    aggregate, Asset, AssetStatus, Gate, GuardedOracle, GuardedOracleClient, Policy, PriceData,
+    UNBOUNDED,
+};
 use soroban_sdk::{
     contract, contractimpl, contracttype, testutils::Address as _, testutils::Ledger, vec, Address,
     Env, Symbol, Vec,
@@ -165,6 +168,100 @@ fn upstream_decimals_are_normalized() {
 fn unknown_asset_has_no_price() {
     let s = setup(1);
     assert_eq!(s.oracle.lastprice(&s.asset), None);
+}
+
+// ─── Combined status view (issue #21) ──────────────────────────────────────────
+
+#[test]
+fn status_matches_the_seven_separate_views_it_replaces() {
+    let s = setup(1);
+    let f = feed(&s.env, 7);
+    f.set(&s.asset, &10_000_000, &NOW);
+    s.oracle.set_sources(
+        &s.asset,
+        &vec![&s.env, (f.address.clone(), s.asset.clone())],
+    );
+    s.oracle.set_policy(
+        &s.asset,
+        &Policy {
+            up_bps_per_hour: 500,
+            down_bps_per_hour: UNBOUNDED,
+            window_secs: 3600,
+        },
+    );
+    s.oracle.seed_anchor(&s.asset);
+    s.oracle.set_gate(
+        &s.asset,
+        &Gate {
+            tight_up_bps_per_hour: 100,
+            tight_down_bps_per_hour: 100,
+            min_cost_ratio_bps: 15_000,
+            max_evidence_age: 3600,
+        },
+    );
+    s.oracle
+        .publish_evidence(&s.asset, &1_000, &2_000, &3_000, &4_000);
+
+    // Move the market after seeding, so the clamp actually has something to do and `quote`
+    // can differ from `raw_price` — otherwise an equality bug could hide behind both being
+    // the unclamped price.
+    s.env.ledger().set_timestamp(NOW + 600);
+    f.set(&s.asset, &10_300_000, &(NOW + 600));
+
+    let status = s.oracle.status(&s.asset);
+    assert_eq!(status.policy, s.oracle.policy(&s.asset));
+    assert_eq!(status.effective_policy, s.oracle.effective_policy(&s.asset));
+    assert_eq!(status.anchor, s.oracle.anchor(&s.asset));
+    assert_eq!(status.raw_price, s.oracle.raw_price(&s.asset));
+    assert_eq!(status.quote, s.oracle.lastprice(&s.asset));
+    assert_eq!(status.gate, s.oracle.gate(&s.asset));
+    assert_eq!(status.evidence, s.oracle.evidence(&s.asset));
+
+    // Every field actually holds real data here, and the clamp is doing something, so this
+    // is not a vacuous pass where every field is None on both sides.
+    assert!(status.anchor.is_some());
+    assert!(status.gate.is_some());
+    assert!(status.evidence.is_some());
+    assert_ne!(status.quote.unwrap().price, status.raw_price.unwrap().price);
+}
+
+#[test]
+fn status_falls_back_to_the_raw_median_with_no_policy_set() {
+    let s = setup(1);
+    let f = feed(&s.env, 7);
+    f.set(&s.asset, &10_000_000, &NOW);
+    s.oracle.set_sources(
+        &s.asset,
+        &vec![&s.env, (f.address.clone(), s.asset.clone())],
+    );
+
+    let status = s.oracle.status(&s.asset);
+    assert_eq!(status.policy, None);
+    assert_eq!(status.effective_policy, None);
+    assert_eq!(status.anchor, None);
+    assert_eq!(status.gate, None);
+    assert_eq!(status.evidence, None);
+    assert_eq!(status.raw_price, status.quote); // no policy: lastprice is just the raw median
+    assert_eq!(status.raw_price.unwrap().price, 10_000_000);
+}
+
+#[test]
+fn status_for_a_completely_unknown_asset_is_all_none() {
+    let s = setup(1);
+    let unknown = Asset::Stellar(Address::generate(&s.env));
+
+    assert_eq!(
+        s.oracle.status(&unknown),
+        AssetStatus {
+            policy: None,
+            effective_policy: None,
+            anchor: None,
+            raw_price: None,
+            quote: None,
+            gate: None,
+            evidence: None,
+        }
+    );
 }
 
 #[test]

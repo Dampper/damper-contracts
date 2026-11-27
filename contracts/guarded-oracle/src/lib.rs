@@ -32,8 +32,8 @@ pub use events::{
     AnchorSeeded, EvidencePublished, GateSet, KeeperSet, Poked, PolicySet, SourcesSet,
 };
 pub use types::{
-    Anchor, Asset, Config, Evidence, Gate, OracleError, Policy, PriceData, Source, UNBOUNDED,
-    UNLIMITED,
+    Anchor, Asset, AssetStatus, Config, Evidence, Gate, OracleError, Policy, PriceData, Source,
+    UNBOUNDED, UNLIMITED,
 };
 
 pub const MAX_SOURCES: u32 = 7;
@@ -378,6 +378,21 @@ impl GuardedOracle {
             price,
             timestamp: median.timestamp,
         })
+    }
+
+    /// Everything a keeper reads for one asset, in one call instead of the seven separate
+    /// `policy`/`effective_policy`/`anchor`/`raw_price`/`lastprice`/`gate`/`evidence` reads
+    /// damper-backend's keeper otherwise simulates every pass (issue #21).
+    pub fn status(env: Env, asset: Asset) -> AssetStatus {
+        AssetStatus {
+            policy: Self::policy(env.clone(), asset.clone()),
+            effective_policy: Self::effective_policy(env.clone(), asset.clone()),
+            anchor: Self::anchor(env.clone(), asset.clone()),
+            raw_price: Self::raw_price(env.clone(), asset.clone()),
+            quote: Self::lastprice(env.clone(), asset.clone()),
+            gate: Self::gate(env.clone(), asset.clone()),
+            evidence: Self::evidence(env, asset),
+        }
     }
 }
 
