@@ -373,6 +373,23 @@ proptest! {
         } // otherwise it overflowed or rounded down to nothing: refused, not wrong
         prop_assert_eq!(normalize(p, from, from), Some(p));
     }
+
+    /// Rescaling down truncates by design (issue #19). Scaling the truncated value back up to
+    /// the original precision is itself exact (multiplying never rounds), so the only loss in
+    /// the whole round trip is what truncating down already threw away: at most one unit of
+    /// the target (`to`) precision, which is `10^(from - to)` units at the original precision.
+    #[test]
+    fn rescaling_down_and_back_up_loses_at_most_one_unit_of_the_target_precision(
+        p in price(), from in 1u32..=18, to in 0u32..=17,
+    ) {
+        prop_assume!(to < from);
+        if let Some(down) = normalize(p, from, to) {
+            let back_up = normalize(down, to, from).unwrap(); // scaling up never refuses or overflows here: down <= p
+            let scale = 10i128.pow(from - to);
+            prop_assert!(back_up <= p, "truncating down must only ever lose value, never add it");
+            prop_assert!(p - back_up < scale, "lost more than one unit of the target precision");
+        } // otherwise truncated all the way to zero: refused by normalize, nothing round-trips
+    }
 }
 
 // ------------------------------------------------------------------ the whole contract
