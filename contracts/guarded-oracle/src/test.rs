@@ -80,6 +80,26 @@ pub(crate) fn feed(env: &Env, decimals: u32) -> MockFeedClient<'static> {
     MockFeedClient::new(env, &id)
 }
 
+// ─── Constructor validation (issue #16) ───────────────────────────────────────
+
+#[test]
+#[should_panic(expected = "Error(Contract, #1)")]
+fn zero_resolution_is_rejected() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let base = Asset::Other(Symbol::new(&env, "USD"));
+    env.register(GuardedOracle, (admin, base, 7u32, 0u32, MAX_AGE, 1u32));
+}
+
+#[test]
+fn a_nonzero_resolution_is_accepted() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let base = Asset::Other(Symbol::new(&env, "USD"));
+    // Must not panic: this is exactly what `setup()` already relies on elsewhere.
+    env.register(GuardedOracle, (admin, base, 7u32, 300u32, MAX_AGE, 1u32));
+}
+
 // ---------------------------------------------------------------- tests
 
 #[test]
