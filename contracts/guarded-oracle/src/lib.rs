@@ -82,7 +82,11 @@ impl GuardedOracle {
         max_age: u64,
         min_sources: u32,
     ) {
-        if decimals > MAX_DECIMALS || max_age == 0 || min_sources == 0 || min_sources > MAX_SOURCES
+        if decimals > MAX_DECIMALS
+            || resolution == 0
+            || max_age == 0
+            || min_sources == 0
+            || min_sources > MAX_SOURCES
         {
             panic_with_error!(&env, OracleError::InvalidConfig);
         }
